@@ -98,7 +98,7 @@ spec:
 
           echo "[INFO] Cloning repositories..."
           clone_or_update_repo "git@github.com:bhavyagupta98/kg_coop_drive.git" "${REPOS_DIR}/kg_coop_drive" "main"
-          clone_or_update_repo "https://github.com/bhavyagupta98/auto_drive_copy.git" "${REPOS_DIR}/auto_drive_copy" "main"
+          clone_or_update_repo "git@github.com:bhavyagupta98/auto_drive_copy.git" "${REPOS_DIR}/auto_drive_copy" "main"
           clone_or_update_repo "https://github.com/eddyhkchiu/V2V-GoT.git" "${V2VGOT_DIR}" "main"
 
           if [ "${DOWNLOAD_DATASET_JSONS:-true}" = "true" ]; then

@@ -82,13 +82,13 @@ kubectl -n seelab exec -it kg-coop-bootstrap -- /bin/bash
 
 ## Notes on Private Repos
 
-`kg_coop_drive` is cloned over SSH:
+`kg_coop_drive` and `auto_drive_copy` are cloned over SSH:
 
 - `git@github.com:bhavyagupta98/kg_coop_drive.git`
+- `git@github.com:bhavyagupta98/auto_drive_copy.git`
 
-The other two are currently cloned over HTTPS in the manifest because they appear public:
+`V2V-GoT` is currently cloned over HTTPS in the manifest because it appears public:
 
-- `https://github.com/bhavyagupta98/auto_drive_copy.git`
 - `https://github.com/eddyhkchiu/V2V-GoT.git`
 
 If you want all three cloned over SSH for consistency, the job can be changed easily.
