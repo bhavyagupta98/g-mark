@@ -1,0 +1,2 @@
+"""KG Cooperative Drive package."""
+
