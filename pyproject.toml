@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kg_coop_drive"
+version = "0.1.0"
+description = "A basic repository for kg_coop_drive"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+kg-coop-drive = "kg_coop_drive.main:main"
