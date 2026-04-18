@@ -31,12 +31,16 @@ spec:
             git \
             git-lfs \
             openssh-client \
+            python3 \
+            python3-pip \
+            python3-venv \
             unzip \
             vim \
             tmux \
             less
           rm -rf /var/lib/apt/lists/*
           git lfs install
+          echo "[INFO] Python version: $(python3 --version)"
 
           echo "[INFO] Preparing SSH configuration from mounted secret..."
           mkdir -p /root/.ssh
@@ -79,7 +83,18 @@ spec:
             fi
 
             mkdir -p "$(dirname "${output_path}")"
+            set +e
             curl -L -C - --fail "${url}" -o "${output_path}"
+            local curl_status=$?
+            set -e
+            if [ "${curl_status}" -ne 0 ]; then
+              if [ "${curl_status}" -eq 22 ] && [ -s "${output_path}" ]; then
+                echo "[WARN] Server rejected resume request for ${output_path}. Keeping existing file."
+              else
+                echo "[ERROR] Download failed for ${output_path}"
+                return "${curl_status}"
+              fi
+            fi
           }
 
           unzip_if_needed() {
@@ -222,8 +237,8 @@ spec:
           value: "true"
       resources:
         requests:
-          cpu: "2"
-          memory: "8Gi"
+          cpu: "4"
+          memory: "16Gi"
         limits:
           cpu: "4"
           memory: "16Gi"
