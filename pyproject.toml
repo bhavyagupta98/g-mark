@@ -13,6 +13,11 @@ authors = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

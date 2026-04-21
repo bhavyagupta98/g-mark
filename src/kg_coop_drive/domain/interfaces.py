@@ -29,3 +29,17 @@ class DatasetInspector(Protocol):
 
     def inspect(self) -> object:
         """Return a dataset inspection report."""
+
+
+class SceneAdapter(Protocol):
+    """Builds an internal scene representation from one external sample."""
+
+    def build_scene(self, record: dict[str, object]) -> object:
+        """Return the canonical scene object for one raw record."""
+
+
+class SceneBuilderPort(Protocol):
+    """Builds a narrated interpretation around one canonical scene."""
+
+    def build(self, scene: object) -> object:
+        """Return the interpreted scene report."""
