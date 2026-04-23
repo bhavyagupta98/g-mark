@@ -59,9 +59,18 @@ def test_processed_scene_loader_builds_tracks_and_visibility(tmp_path: Path) -> 
     assert len(data.visibility_facts) == 2
 
 
-def test_processed_scene_loader_detects_cobevt_layout_first(tmp_path: Path) -> None:
-    npy_root = tmp_path / "cobevt" / "npy"
-    npy_root.mkdir(parents=True)
+def test_processed_scene_loader_prefers_cooperative_root_by_default(tmp_path: Path) -> None:
+    cobevt_root = tmp_path / "cobevt" / "npy"
+    cobevt_root.mkdir(parents=True)
+    cooperative_root = (
+        tmp_path
+        / "DMSTrack"
+        / "V2V4Real"
+        / "official_models"
+        / "no_fusion_keep_all"
+        / "npy"
+    )
+    cooperative_root.mkdir(parents=True)
 
     corners = np.array(
         [
@@ -77,10 +86,54 @@ def test_processed_scene_loader_detects_cobevt_layout_first(tmp_path: Path) -> N
             ]
         ]
     )
-    np.save(npy_root / "0008_gt.npy", corners)
-    np.save(npy_root / "0008_gt_object_id.npy", np.array([7]))
+    np.save(cobevt_root / "0008_gt.npy", corners)
+    np.save(cobevt_root / "0008_gt_object_id.npy", np.array([7]))
+    np.save(cooperative_root / "0008_gt.npy", corners)
+    np.save(cooperative_root / "0008_gt_object_id.npy", np.array([11]))
 
     loader = V2VGoTProcessedAssetLoader(str(tmp_path))
+    availability = loader.inspect_availability(timestamp_index=8, split_name="val")
+    data = loader.load_frame_scene_data(timestamp_index=8, split_name="val")
+
+    assert availability.npy_root.endswith("no_fusion_keep_all/npy")
+    assert availability.has_gt_boxes
+    assert data is not None
+    assert data.object_tracks[0].object_id == "11"
+
+
+def test_processed_scene_loader_supports_benchmark_profile_priority(tmp_path: Path) -> None:
+    cobevt_root = tmp_path / "cobevt" / "npy"
+    cobevt_root.mkdir(parents=True)
+    cooperative_root = (
+        tmp_path
+        / "DMSTrack"
+        / "V2V4Real"
+        / "official_models"
+        / "no_fusion_keep_all"
+        / "npy"
+    )
+    cooperative_root.mkdir(parents=True)
+
+    corners = np.array(
+        [
+            [
+                [0.0, 0.0, 2.0],
+                [2.0, 0.0, 2.0],
+                [2.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 2.0],
+                [2.0, 1.0, 2.0],
+                [2.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ]
+        ]
+    )
+    np.save(cobevt_root / "0008_gt.npy", corners)
+    np.save(cobevt_root / "0008_gt_object_id.npy", np.array([7]))
+    np.save(cooperative_root / "0008_gt.npy", corners)
+    np.save(cooperative_root / "0008_gt_object_id.npy", np.array([11]))
+
+    loader = V2VGoTProcessedAssetLoader(str(tmp_path), asset_profile="benchmark")
     availability = loader.inspect_availability(timestamp_index=8, split_name="val")
     data = loader.load_frame_scene_data(timestamp_index=8, split_name="val")
 

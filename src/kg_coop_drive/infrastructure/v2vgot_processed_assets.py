@@ -21,8 +21,28 @@ from kg_coop_drive.domain.scene import (
 class V2VGoTProcessedAssetLoader:
     """Loads processed timestamped GT and visibility arrays from V2V-GoT assets."""
 
-    def __init__(self, repository_root: str) -> None:
+    _ASSET_PROFILE_PRIORITIES: dict[str, dict[str, tuple[str, ...]]] = {
+        "cooperative": {
+            "val": ("no_fusion_keep_all", "train_no_fusion_keep_all", "cobevt"),
+            "train": ("train_no_fusion_keep_all", "no_fusion_keep_all", "cobevt"),
+        },
+        "benchmark": {
+            "val": ("cobevt", "no_fusion_keep_all", "train_no_fusion_keep_all"),
+            "train": ("cobevt", "train_no_fusion_keep_all", "no_fusion_keep_all"),
+        },
+        "all_available": {
+            "val": ("no_fusion_keep_all", "train_no_fusion_keep_all", "cobevt"),
+            "train": ("train_no_fusion_keep_all", "no_fusion_keep_all", "cobevt"),
+        },
+    }
+
+    def __init__(
+        self,
+        repository_root: str,
+        asset_profile: str = "cooperative",
+    ) -> None:
         self._repository_root = Path(repository_root).expanduser().resolve()
+        self._asset_profile = asset_profile
 
     def inspect_availability(
         self,
@@ -206,16 +226,39 @@ class V2VGoTProcessedAssetLoader:
         return candidates[0]
 
     def _candidate_npy_roots(self, split_name: str) -> tuple[Path, ...]:
-        split_dir = (
-            "no_fusion_keep_all"
-            if split_name == "val"
-            else "train_no_fusion_keep_all"
+        return tuple(
+            self._model_root(model_name)
+            for model_name in self._ordered_model_names(split_name=split_name)
         )
+
+    def _ordered_model_names(self, split_name: str) -> tuple[str, ...]:
+        profile_priorities = self._ASSET_PROFILE_PRIORITIES.get(self._asset_profile)
+        if profile_priorities is None:
+            supported = ", ".join(sorted(self._ASSET_PROFILE_PRIORITIES))
+            raise ValueError(
+                f"Unsupported asset_profile '{self._asset_profile}'. Supported profiles: {supported}."
+            )
+
+        split_priorities = profile_priorities.get(split_name)
+        if split_priorities is None:
+            supported_splits = ", ".join(sorted(profile_priorities))
+            raise ValueError(
+                f"Unsupported split '{split_name}' for asset_profile '{self._asset_profile}'. "
+                f"Supported splits: {supported_splits}."
+            )
+
+        return split_priorities
+
+    def _model_root(self, model_name: str) -> Path:
+        if model_name == "cobevt":
+            return self._repository_root / "cobevt" / "npy"
         return (
-            self._repository_root / "cobevt" / "npy",
-            self._repository_root / "DMSTrack" / "V2V4Real" / "official_models" / split_dir / "npy",
-            self._repository_root / "DMSTrack" / "V2V4Real" / "official_models" / "no_fusion_keep_all" / "npy",
-            self._repository_root / "DMSTrack" / "V2V4Real" / "official_models" / "train_no_fusion_keep_all" / "npy",
+            self._repository_root
+            / "DMSTrack"
+            / "V2V4Real"
+            / "official_models"
+            / model_name
+            / "npy"
         )
 
     def _load_observations(
