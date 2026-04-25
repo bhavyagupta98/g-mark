@@ -17,23 +17,17 @@ spec:
     - key: nautilus.io/issue
       operator: Exists
       effect: NoSchedule
-  # Optional A100 pinning for later use when high-memory GPUs are available:
-  #
-  # tolerations:
-  #   - effect: NoSchedule
-  #     key: nautilus.io/hardware
-  #     operator: Equal
-  #     value: large-gpu
-  #
-  # affinity:
-  #   nodeAffinity:
-  #     requiredDuringSchedulingIgnoredDuringExecution:
-  #       nodeSelectorTerms:
-  #         - matchExpressions:
-  #             - key: nvidia.com/gpu.product
-  #               operator: In
-  #               values:
-  #                 - NVIDIA-A100-SXM4-80GB
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                  - NVIDIA-A10
+                  - NVIDIA-RTX-A6000
+                  - NVIDIA-A100-SXM4-80GB
 
   containers:
     - name: runtime-awq-llm
@@ -175,8 +169,8 @@ spec:
           memory: "24Gi"
           nvidia.com/gpu: "1"
         limits:
-          cpu: "8"
-          memory: "30Gi"
+          cpu: "6"
+          memory: "24Gi"
           nvidia.com/gpu: "1"
       volumeMounts:
         - name: storage
