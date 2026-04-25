@@ -9,6 +9,7 @@ from kg_coop_drive.application.cross_agent_support_enricher import CrossAgentSup
 from kg_coop_drive.application.observation_associator import ObservationAssociator
 from kg_coop_drive.application.processed_scene_service import ProcessedSceneEnricher
 from kg_coop_drive.application.relation_builder import RelationBuilder
+from kg_coop_drive.application.temporal_track_manager import TemporalTrackManager
 from kg_coop_drive.application.track_merger import TrackMerger
 from kg_coop_drive.application.track_quality_assessor import TrackQualityAssessor
 from kg_coop_drive.application.track_support_enricher import TrackSupportEnricher
@@ -18,6 +19,7 @@ from kg_coop_drive.domain.benchmark import (
     BenchmarkEvaluationSummary,
     BenchmarkPrediction,
     BenchmarkSample,
+    BenchmarkTaskType,
 )
 from kg_coop_drive.domain.processed_scene import ProcessedFrameSceneData
 from kg_coop_drive.domain.scene import CooperativeScene, VisibilityFact
@@ -49,6 +51,7 @@ class V2VGoTQAPhase5AEvaluator:
         self._track_quality_assessor = TrackQualityAssessor()
         self._visibility_reasoner = VisibilityReasoner()
         self._relation_builder = RelationBuilder()
+        self._temporal_track_manager = TemporalTrackManager()
 
     def evaluate_samples(
         self,
@@ -106,7 +109,7 @@ class V2VGoTQAPhase5AEvaluator:
             total_samples=len(predictions),
             evaluated_samples=len(predictions),
             supported_predictions=supported_predictions,
-                unsupported_predictions=len(predictions) - supported_predictions,
+            unsupported_predictions=len(predictions) - supported_predictions,
         )
 
     def prepare_sample(
@@ -128,7 +131,21 @@ class V2VGoTQAPhase5AEvaluator:
             processed_data=processed_data,
             baseline_mode=baseline_mode,
         )
-        scene = self._processed_enricher.enrich(sample.scene, processed_data)
+        scene = self._prepare_single_frame_scene(sample.scene, processed_data)
+        if self._should_temporally_enrich(sample):
+            scene = self._temporally_enrich_motion_scene(
+                sample=sample,
+                current_scene=scene,
+                baseline_mode=baseline_mode,
+            )
+        return scene
+
+    def _prepare_single_frame_scene(
+        self,
+        scene: CooperativeScene,
+        processed_data: ProcessedFrameSceneData,
+    ) -> CooperativeScene:
+        scene = self._processed_enricher.enrich(scene, processed_data)
         association_report = self._observation_associator.associate(scene, max_distance=3.0)
         scene = self._track_support_enricher.enrich(scene, association_report)
         scene = self._candidate_track_creator.promote(scene, association_report)
@@ -150,6 +167,54 @@ class V2VGoTQAPhase5AEvaluator:
         )
         scene = self._relation_builder.build(scene)
         return scene
+
+    def _temporally_enrich_motion_scene(
+        self,
+        sample: BenchmarkSample,
+        current_scene: CooperativeScene,
+        baseline_mode: str,
+    ) -> CooperativeScene:
+        previous_timestamp_index = sample.scene.global_timestamp_index - 1
+        if previous_timestamp_index < 0:
+            return current_scene
+
+        previous_processed_data = self._processed_loader.load_frame_scene_data(
+            timestamp_index=previous_timestamp_index,
+            split_name=sample.split_name,
+        )
+        if previous_processed_data is None:
+            return current_scene
+
+        previous_scene_seed = replace(
+            sample.scene,
+            local_timestamp_index=previous_timestamp_index,
+            global_timestamp_index=previous_timestamp_index,
+        )
+        previous_processed_data = self._apply_baseline_mode_to_processed_data(
+            sample=replace(sample, scene=previous_scene_seed),
+            processed_data=previous_processed_data,
+            baseline_mode=baseline_mode,
+        )
+        previous_scene = self._prepare_single_frame_scene(
+            previous_scene_seed,
+            previous_processed_data,
+        )
+        temporal_scene, _temporal_report = self._temporal_track_manager.update(
+            previous_scene,
+            current_scene,
+            max_distance=8.0,
+            max_missed_frames=0,
+        )
+        temporal_scene = self._track_quality_assessor.assess(temporal_scene)
+        temporal_scene = self._relation_builder.build(temporal_scene)
+        return temporal_scene
+
+    @staticmethod
+    def _should_temporally_enrich(sample: BenchmarkSample) -> bool:
+        return sample.task_type in {
+            BenchmarkTaskType.OBJECT_MOTION_PREDICTION,
+            BenchmarkTaskType.AGENT_MOTION_PREDICTION,
+        }
 
     @staticmethod
     def _apply_baseline_mode_to_processed_data(

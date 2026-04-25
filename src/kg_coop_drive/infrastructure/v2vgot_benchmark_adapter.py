@@ -40,9 +40,16 @@ class V2VGoTQABenchmarkAdapter:
         """Load benchmark samples together with canonical scenes and task labels."""
 
         records = self._scene_adapter.load_records(split_name=split_name, file_name=file_name)
+        previous_record_by_scene_timestamp = self._index_previous_records(records)
         samples: list[BenchmarkSample] = []
         for index, record in enumerate(records):
-            scene = self._scene_adapter.build_scene(record)
+            previous_record = previous_record_by_scene_timestamp.get(
+                self._previous_record_key(record)
+            )
+            scene = self._scene_adapter.build_scene(
+                record,
+                previous_record=previous_record,
+            )
             qa_type_id = self._read_qa_type_id(record)
             sample_id = self._read_sample_id(record, index=index)
             samples.append(
@@ -58,6 +65,30 @@ class V2VGoTQABenchmarkAdapter:
                 )
             )
         return tuple(samples)
+
+    @classmethod
+    def _index_previous_records(
+        cls,
+        records: list[dict[str, object]],
+    ) -> dict[tuple[str, int], dict[str, object]]:
+        return {
+            cls._record_key(record): record
+            for record in records
+        }
+
+    @classmethod
+    def _previous_record_key(cls, record: dict[str, object]) -> tuple[str, int]:
+        return (
+            str(record.get("scenario_index", "unknown_scene")),
+            cls._read_timestamp(record) - 1,
+        )
+
+    @classmethod
+    def _record_key(cls, record: dict[str, object]) -> tuple[str, int]:
+        return (
+            str(record.get("scenario_index", "unknown_scene")),
+            cls._read_timestamp(record),
+        )
 
     def summarize_task_inventory(
         self,
@@ -135,6 +166,10 @@ class V2VGoTQABenchmarkAdapter:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _read_timestamp(record: dict[str, object]) -> int:
+        return int(record.get("global_timestamp_index", record.get("local_timestamp_index", -1)))
 
     @staticmethod
     def _read_sample_id(record: dict[str, object], index: int) -> str:

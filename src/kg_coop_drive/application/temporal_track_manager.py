@@ -8,6 +8,7 @@ from kg_coop_drive.domain.scene import (
     ObjectTrack,
     ProvenanceRecord,
     TemporalTrackUpdateReport,
+    Vector2D,
 )
 
 
@@ -115,6 +116,15 @@ class TemporalTrackManager:
             for observation in current_track.observations
             if observation.observation_id not in existing_observation_ids
         )
+        frame_delta = max(
+            1,
+            current_track.provenance.latest_timestamp_index
+            - previous_track.provenance.latest_timestamp_index,
+        )
+        velocity = Vector2D(
+            x=(current_track.position.x - previous_track.position.x) / frame_delta,
+            y=(current_track.position.y - previous_track.position.y) / frame_delta,
+        )
         return replace(
             current_track,
             object_id=previous_track.object_id,
@@ -122,5 +132,6 @@ class TemporalTrackManager:
             status=current_track.status,
             age_frames=previous_track.age_frames + 1,
             miss_count=0,
+            velocity=velocity,
             observations=merged_observations,
         )

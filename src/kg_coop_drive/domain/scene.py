@@ -73,6 +73,8 @@ class AgentContext:
 
     agent_id: str
     pose: Pose2D
+    velocity: Vector2D | None = None
+    planned_trajectory: Trajectory | None = None
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,13 @@
+from __future__ import annotations
+
 from kg_coop_drive.application.v2vgotqa_router import (
+    AgentMotionPredictionHandler,
+    ControlSettingsHandler,
+    FutureTrajectoryHandler,
     NotableObjectsHandler,
     NotableObjectLLMRankItem,
     NotableObjectLLMRankedItem,
+    ObjectMotionPredictionHandler,
     OccludingObjectLLMRankItem,
     OccludingObjectLLMRankedItem,
     OccludingObjectsHandler,
@@ -16,6 +22,7 @@ from kg_coop_drive.domain.scene import (
     Pose2D,
     ProvenanceRecord,
     Trajectory,
+    Vector2D,
     VisibilityFact,
     VisibilityState,
 )
@@ -45,6 +52,7 @@ def _scene() -> CooperativeScene:
                     observation_ids=("obs-1",),
                     latest_timestamp_index=0,
                 ),
+                velocity=Vector2D(2.0, 0.0),
             ),
             ObjectTrack(
                 object_id="occluded-car",
@@ -56,6 +64,7 @@ def _scene() -> CooperativeScene:
                     observation_ids=("obs-2",),
                     latest_timestamp_index=0,
                 ),
+                velocity=Vector2D(0.0, -1.0),
             ),
         ),
         visibility_facts=(
@@ -307,6 +316,156 @@ def test_v2vgotqa_router_answers_invisible_objects() -> None:
     assert "invisible" in answer.answer_text.lower()
 
 
+def test_v2vgotqa_router_answers_object_motion_prediction() -> None:
+    router = V2VGoTQARouter()
+
+    answer = router.answer(_sample(BenchmarkTaskType.OBJECT_MOTION_PREDICTION))
+
+    assert answer.supported is True
+    assert answer.object_ids == ("visible-car", "occluded-car")
+    assert answer.answer_text == (
+        "Predicted object motion: visible-car=moving forward from (11.0, 0.5) to (13.0, 0.5); "
+        "occluded-car=moving left from (12.0, -0.5) to (12.0, -1.5)."
+    )
+
+
+def test_v2vgotqa_router_answers_agent_motion_prediction() -> None:
+    router = V2VGoTQARouter()
+
+    answer = router.answer(_sample(BenchmarkTaskType.AGENT_MOTION_PREDICTION))
+
+    assert answer.supported is True
+    assert answer.object_ids == ("CAV_1",)
+    assert answer.answer_text == (
+        "Predicted agent motion: CAV_1=hold position near (5.0, 0.0)."
+    )
+
+
+def test_v2vgotqa_router_answers_future_trajectory() -> None:
+    router = V2VGoTQARouter()
+
+    answer = router.answer(_sample(BenchmarkTaskType.FUTURE_TRAJECTORY))
+
+    assert answer.supported is True
+    assert answer.object_ids == ()
+    assert answer.answer_text == (
+        "Suggested future trajectory: [(10.0, 0.0), (20.0, 0.0), (30.0, 0.0)]."
+    )
+
+
+def test_v2vgotqa_router_answers_control_settings() -> None:
+    router = V2VGoTQARouter()
+
+    answer = router.answer(_sample(BenchmarkTaskType.CONTROL_SETTINGS))
+
+    assert answer.supported is True
+    assert answer.object_ids == ("occluded-car", "visible-car")
+    assert answer.answer_text == (
+        "Suggested control settings: speed=reduce speed sharply; steering=steer left; key objects: occluded-car, visible-car."
+    )
+
+
+def test_future_trajectory_handler_renders_points_directly() -> None:
+    handler = FutureTrajectoryHandler()
+
+    answer = handler.answer(_sample(BenchmarkTaskType.FUTURE_TRAJECTORY))
+
+    assert answer.supported is True
+    assert answer.object_ids == ()
+    assert answer.answer_text.endswith("[(10.0, 0.0), (20.0, 0.0), (30.0, 0.0)].")
+
+
+def test_control_settings_handler_renders_speed_and_steering() -> None:
+    handler = ControlSettingsHandler()
+
+    answer = handler.answer(_sample(BenchmarkTaskType.CONTROL_SETTINGS))
+
+    assert answer.supported is True
+    assert answer.object_ids == ("occluded-car", "visible-car")
+    assert "speed=reduce speed sharply" in answer.answer_text
+    assert "steering=steer left" in answer.answer_text
+
+
+def test_object_motion_prediction_handler_projects_object_velocity() -> None:
+    handler = ObjectMotionPredictionHandler()
+
+    answer = handler.answer(_sample(BenchmarkTaskType.OBJECT_MOTION_PREDICTION))
+
+    assert answer.supported is True
+    assert answer.object_ids == ("visible-car", "occluded-car")
+    assert "visible-car=moving forward" in answer.answer_text
+    assert "to (13.0, 0.5)" in answer.answer_text
+
+
+def test_agent_motion_prediction_handler_renders_other_agent_positions() -> None:
+    handler = AgentMotionPredictionHandler()
+
+    answer = handler.answer(_sample(BenchmarkTaskType.AGENT_MOTION_PREDICTION))
+
+    assert answer.supported is True
+    assert answer.object_ids == ("CAV_1",)
+    assert "CAV_1=hold position near (5.0, 0.0)" in answer.answer_text
+
+
+def test_agent_motion_prediction_handler_projects_agent_velocity() -> None:
+    handler = AgentMotionPredictionHandler()
+    scene = CooperativeScene(
+        scene_id="scene-agent-motion",
+        local_timestamp_index=1,
+        global_timestamp_index=1,
+        asker_agent_id="CAV_EGO",
+        agents=(
+            AgentContext(agent_id="CAV_EGO", pose=Pose2D(position=Point2D(0.0, 0.0))),
+            AgentContext(
+                agent_id="CAV_1",
+                pose=Pose2D(position=Point2D(5.0, 1.0)),
+                velocity=Vector2D(0.0, 2.0),
+            ),
+        ),
+        future_trajectory=Trajectory(points=(Point2D(10.0, 0.0),)),
+    )
+
+    answer = handler.answer(
+        _sample_with_scene(BenchmarkTaskType.AGENT_MOTION_PREDICTION, scene)
+    )
+
+    assert answer.supported is True
+    assert answer.object_ids == ("CAV_1",)
+    assert answer.answer_text == (
+        "Predicted agent motion: CAV_1=move right from (5.0, 1.0) to (5.0, 3.0)."
+    )
+
+
+def test_agent_motion_prediction_handler_uses_planned_trajectory_when_velocity_is_static() -> None:
+    handler = AgentMotionPredictionHandler()
+    scene = CooperativeScene(
+        scene_id="scene-agent-trajectory",
+        local_timestamp_index=1,
+        global_timestamp_index=1,
+        asker_agent_id="CAV_EGO",
+        agents=(
+            AgentContext(agent_id="CAV_EGO", pose=Pose2D(position=Point2D(0.0, 0.0))),
+            AgentContext(
+                agent_id="CAV_1",
+                pose=Pose2D(position=Point2D(5.0, 1.0)),
+                velocity=Vector2D(0.0, 0.0),
+                planned_trajectory=Trajectory(points=(Point2D(8.0, 0.2), Point2D(20.0, 0.5))),
+            ),
+        ),
+        future_trajectory=Trajectory(points=(Point2D(10.0, 0.0),)),
+    )
+
+    answer = handler.answer(
+        _sample_with_scene(BenchmarkTaskType.AGENT_MOTION_PREDICTION, scene)
+    )
+
+    assert answer.supported is True
+    assert answer.object_ids == ("CAV_1",)
+    assert answer.answer_text == (
+        "Predicted agent motion: CAV_1=move forward from (5.0, 1.0) to (25.0, 1.5)."
+    )
+
+
 def test_v2vgotqa_router_answers_planning_awareness() -> None:
     router = V2VGoTQARouter()
 
@@ -320,7 +479,7 @@ def test_v2vgotqa_router_answers_planning_awareness() -> None:
 def test_v2vgotqa_router_marks_unsupported_tasks_explicitly() -> None:
     router = V2VGoTQARouter()
 
-    answer = router.answer(_sample(BenchmarkTaskType.FUTURE_TRAJECTORY))
+    answer = router.answer(_sample(BenchmarkTaskType.UNKNOWN))
 
     assert answer.supported is False
     assert answer.object_ids == ()

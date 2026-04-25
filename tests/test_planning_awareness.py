@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from kg_coop_drive.application.planning_awareness import (
     DiverseTopKDecisionPolicy,
     EnergyBasedDecisionPolicy,
@@ -15,6 +17,7 @@ from kg_coop_drive.application.planning_awareness import (
     RelationalImportancePlanningAwarenessScorer,
     RiskAwarePlanningAwarenessScorer,
     TopScoreDecisionPolicy,
+    build_planning_awareness_decision_policy,
     build_planning_awareness_orchestrator,
     build_planning_awareness_scorer,
 )
@@ -288,13 +291,18 @@ def test_energy_based_policy_penalizes_redundant_candidates() -> None:
     assert not {"gt-supported", "dup-a"} <= set(selected_ids)
 
 
-def test_build_planning_awareness_scorer_rejects_llm_without_client() -> None:
+def test_build_planning_awareness_decision_policy_rejects_llm_without_client() -> None:
+    scorer = build_planning_awareness_scorer(PlanningAwarenessRanker.LLM)
+
     try:
-        build_planning_awareness_scorer(PlanningAwarenessRanker.LLM)
+        build_planning_awareness_decision_policy(
+            PlanningAwarenessRanker.LLM,
+            scorer=scorer,
+        )
     except ValueError as exc:
         assert "llm_client" in str(exc)
     else:
-        raise AssertionError("Expected ValueError when building llm scorer without client.")
+        raise AssertionError("Expected ValueError when building llm decision policy without client.")
 
 
 def test_diverse_top2_policy_prefers_one_occluded_and_one_visible_candidate() -> None:

@@ -1,3 +1,5 @@
+import pytest
+
 from kg_coop_drive.application.temporal_track_manager import TemporalTrackManager
 from kg_coop_drive.domain.scene import (
     AgentContext,
@@ -120,6 +122,9 @@ def test_temporal_track_manager_persists_close_track_identity_and_reports_new_an
     )
     persisted_track = updated_scene.object_tracks[0]
     assert persisted_track.age_frames == 3
+    assert persisted_track.velocity is not None
+    assert persisted_track.velocity.x == pytest.approx(0.8)
+    assert persisted_track.velocity.y == pytest.approx(0.2)
     assert len(persisted_track.observations) == 2
     retained_stale_track = updated_scene.object_tracks[2]
     assert retained_stale_track.object_id == "track-stale"

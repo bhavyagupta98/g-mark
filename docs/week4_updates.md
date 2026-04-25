@@ -349,3 +349,62 @@ What remains is no longer Phase 5 plumbing. The next work should focus on:
   - `agent_motion_prediction`
   - `control_settings`
   - `future_trajectory`
+
+### Phase 7 Closeout: Deferred Task Expansion
+
+Phase 7 is now implementation-complete as the deferred-task expansion phase.
+
+What Phase 7 added:
+
+- end-to-end router support for:
+  - `future_trajectory`
+  - `control_settings`
+  - `object_motion_prediction`
+  - `agent_motion_prediction`
+- benchmark-path smoke coverage for all deferred task families
+- focused unit coverage for direct handlers and router integration
+- motion-fidelity upgrades for the prediction tasks:
+  - object motion now uses adjacent-frame object-track velocity when available
+  - agent motion now uses nonzero CAV pose velocity when available, otherwise planned trajectory direction
+
+Final Phase 7 VM smoke status:
+
+- deferred tasks:
+  - `future_trajectory`: `25/25` supported, `0` unsupported
+  - `control_settings`: `25/25` supported, `0` unsupported
+  - `object_motion_prediction`: `25/25` supported, `0` unsupported
+  - `agent_motion_prediction`: `25/25` supported, `0` unsupported
+- frozen QA tasks:
+  - `notable_objects`: `25/25` supported, `0` unsupported
+  - `occluding_objects`: `25/25` supported, `0` unsupported
+  - `invisible_objects`: `25/25` supported, `0` unsupported
+  - `planning_awareness`: `25/25` supported, `0` unsupported
+
+Interpretation:
+
+- Phase 7 should be treated as complete for benchmark-path task coverage and smoke-level regression.
+- The old Phase 6 QA checkpoint remained stable under the Phase 7 expansion.
+- The deferred planning and prediction tasks now have deterministic first-pass baselines.
+- Remaining work is evaluation depth, not implementation plumbing.
+
+### Phase 8 Handoff
+
+The next phase should be:
+
+**Phase 8: Scored Evaluation, Metric Alignment, And Baseline Archival**
+
+Phase 8 should focus on:
+
+- full scored validation slices for the old QA tasks and the new deferred tasks
+- official-style or paper-aligned metrics for:
+  - trajectory L2 error
+  - object motion prediction error
+  - agent motion prediction accuracy or direction agreement
+  - control/action error
+- archived deterministic baselines before further tuning
+- comparison to V2V-GoT paper references where the local reproduction scorer is compatible
+- optional LLM/reranker experiments only after deterministic baselines are frozen
+
+Phase 8 planning note:
+
+- `docs/phase8_scored_evaluation_and_baseline_archival.md`

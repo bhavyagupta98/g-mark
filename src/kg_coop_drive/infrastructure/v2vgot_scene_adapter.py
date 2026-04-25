@@ -10,6 +10,7 @@ from kg_coop_drive.domain.scene import (
     Point2D,
     Pose2D,
     Trajectory,
+    Vector2D,
 )
 
 
@@ -38,12 +39,24 @@ class V2VGoTSceneAdapter:
 
         return self._load_records(split_name=split_name, file_name=file_name)
 
-    def build_scene(self, record: dict[str, object]) -> CooperativeScene:
+    def build_scene(
+        self,
+        record: dict[str, object],
+        previous_record: dict[str, object] | None = None,
+    ) -> CooperativeScene:
         """Build a scene seed from one raw V2V-GoT QA record."""
 
         conversations = record.get("conversations", [])
         question = self._conversation_value(conversations, 0)
         answer = self._conversation_value(conversations, 1)
+        ego_pose = self._parse_pose(record.get("cav_ego_lidar_pose"))
+        cav1_pose = self._parse_pose(record.get("cav_1_lidar_pose"))
+        ego_trajectory = self._parse_trajectory(
+            str(record.get("future_trajectory_str_in_ego", "[]"))
+        )
+        cav1_trajectory = self._parse_trajectory(
+            str(record.get("future_trajectory_str_in_self", "[]"))
+        )
 
         return CooperativeScene(
             scene_id=str(record.get("scenario_index", "unknown_scene")),
@@ -55,16 +68,28 @@ class V2VGoTSceneAdapter:
             agents=(
                 AgentContext(
                     agent_id="CAV_EGO",
-                    pose=self._parse_pose(record.get("cav_ego_lidar_pose")),
+                    pose=ego_pose,
+                    velocity=self._derive_agent_velocity(
+                        record=record,
+                        previous_record=previous_record,
+                        pose=ego_pose,
+                        pose_key="cav_ego_lidar_pose",
+                    ),
+                    planned_trajectory=ego_trajectory,
                 ),
                 AgentContext(
                     agent_id="CAV_1",
-                    pose=self._parse_pose(record.get("cav_1_lidar_pose")),
+                    pose=cav1_pose,
+                    velocity=self._derive_agent_velocity(
+                        record=record,
+                        previous_record=previous_record,
+                        pose=cav1_pose,
+                        pose_key="cav_1_lidar_pose",
+                    ),
+                    planned_trajectory=cav1_trajectory,
                 ),
             ),
-            future_trajectory=self._parse_trajectory(
-                str(record.get("future_trajectory_str_in_ego", "[]"))
-            ),
+            future_trajectory=ego_trajectory,
             raw_question=question,
             raw_answer=answer,
         )
@@ -111,6 +136,35 @@ class V2VGoTSceneAdapter:
         y = float(values[1]) if len(values) > 1 else 0.0
         yaw = float(values[4]) if len(values) > 4 else 0.0
         return Pose2D(position=Point2D(x=x, y=y), yaw_radians=yaw)
+
+    @classmethod
+    def _derive_agent_velocity(
+        cls,
+        record: dict[str, object],
+        previous_record: dict[str, object] | None,
+        pose: Pose2D,
+        pose_key: str,
+    ) -> Vector2D | None:
+        if previous_record is None:
+            return None
+        if str(record.get("scenario_index", "")) != str(previous_record.get("scenario_index", "")):
+            return None
+
+        current_timestamp = cls._read_timestamp(record)
+        previous_timestamp = cls._read_timestamp(previous_record)
+        frame_delta = current_timestamp - previous_timestamp
+        if frame_delta <= 0:
+            return None
+
+        previous_pose = cls._parse_pose(previous_record.get(pose_key))
+        return Vector2D(
+            x=(pose.position.x - previous_pose.position.x) / frame_delta,
+            y=(pose.position.y - previous_pose.position.y) / frame_delta,
+        )
+
+    @staticmethod
+    def _read_timestamp(record: dict[str, object]) -> int:
+        return int(record.get("global_timestamp_index", record.get("local_timestamp_index", -1)))
 
     @staticmethod
     def _parse_trajectory(raw_trajectory: str) -> Trajectory:

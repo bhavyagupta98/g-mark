@@ -10,7 +10,7 @@ from kg_coop_drive.application.planning_awareness import (
 )
 from kg_coop_drive.application.query_engine import SceneQueryEngine
 from kg_coop_drive.domain.benchmark import BenchmarkSample, BenchmarkTaskType
-from kg_coop_drive.domain.scene import QueryResult, RelationType, VisibilityState
+from kg_coop_drive.domain.scene import QueryResult, RelationType, TrackStatus, VisibilityState
 
 
 @dataclass(frozen=True)
@@ -129,6 +129,10 @@ class V2VGoTQARouter:
             NotableObjectsHandler(),
             OccludingObjectsHandler(),
             InvisibleObjectsHandler(),
+            ObjectMotionPredictionHandler(),
+            AgentMotionPredictionHandler(),
+            FutureTrajectoryHandler(),
+            ControlSettingsHandler(),
             PlanningAwarenessHandler(),
         )
         resolved_handlers = {handler.task_type: handler for handler in default_handlers}
@@ -844,6 +848,365 @@ class InvisibleObjectsHandler(_BaseQueryHandler):
             empty_message="There is no notable object invisible to you near your planned future trajectory.",
             prefix="Notable invisible objects",
         )
+
+
+@dataclass(frozen=True)
+class MotionPrediction:
+    """Projected one-step motion for a scene entity."""
+
+    entity_id: str
+    start_x: float
+    start_y: float
+    end_x: float
+    end_y: float
+    motion_label: str
+
+
+class ObjectMotionPredictionHandler(_BaseQueryHandler):
+    """Handles qa_type_id 15/17 object-motion-prediction questions."""
+
+    task_type = BenchmarkTaskType.OBJECT_MOTION_PREDICTION
+    _prediction_horizon_seconds = 1.0
+
+    def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
+        predictions = self._predict(sample)
+        if not predictions:
+            return BenchmarkAnswer(
+                sample_id=sample.sample_id,
+                task_type=self.task_type,
+                answer_text="There are no object tracks available for motion prediction.",
+                object_ids=(),
+                supported=True,
+            )
+
+        rendered_predictions = "; ".join(
+            (
+                f"{prediction.entity_id}={prediction.motion_label} "
+                f"from ({prediction.start_x:.1f}, {prediction.start_y:.1f}) "
+                f"to ({prediction.end_x:.1f}, {prediction.end_y:.1f})"
+            )
+            for prediction in predictions
+        )
+        return BenchmarkAnswer(
+            sample_id=sample.sample_id,
+            task_type=self.task_type,
+            answer_text=f"Predicted object motion: {rendered_predictions}.",
+            object_ids=tuple(prediction.entity_id for prediction in predictions),
+            supported=True,
+        )
+
+    def _predict(self, sample: BenchmarkSample) -> tuple[MotionPrediction, ...]:
+        scene = sample.scene
+        visibility_by_object = self._visibility_lookup(scene, scene.asker_agent_id)
+        ranked_objects = sorted(
+            scene.object_tracks,
+            key=lambda object_track: (
+                self._distance_to_trajectory(scene, object_track),
+                self._status_rank(object_track),
+                -object_track.confidence,
+                object_track.object_id,
+            ),
+        )
+        relevant_objects = tuple(
+            object_track
+            for object_track in ranked_objects
+            if self._distance_to_trajectory(scene, object_track) <= 8.0
+            or visibility_by_object.get(object_track.object_id) in {
+                VisibilityState.OCCLUDED,
+                VisibilityState.UNCERTAIN,
+            }
+        )[:3]
+        if not relevant_objects:
+            relevant_objects = tuple(ranked_objects[:3])
+
+        return tuple(self._predict_object_motion(object_track) for object_track in relevant_objects)
+
+    def _predict_object_motion(self, object_track) -> MotionPrediction:
+        velocity = object_track.velocity
+        start_x = object_track.position.x
+        start_y = object_track.position.y
+        if velocity is None:
+            return MotionPrediction(
+                entity_id=object_track.object_id,
+                start_x=start_x,
+                start_y=start_y,
+                end_x=start_x,
+                end_y=start_y,
+                motion_label="stationary",
+            )
+
+        end_x = start_x + velocity.x * self._prediction_horizon_seconds
+        end_y = start_y + velocity.y * self._prediction_horizon_seconds
+        speed = (velocity.x**2 + velocity.y**2) ** 0.5
+        if speed < 0.1:
+            motion_label = "stationary"
+        elif abs(velocity.x) >= abs(velocity.y):
+            motion_label = "moving forward" if velocity.x >= 0.0 else "moving backward"
+        else:
+            motion_label = "moving right" if velocity.y >= 0.0 else "moving left"
+        return MotionPrediction(
+            entity_id=object_track.object_id,
+            start_x=start_x,
+            start_y=start_y,
+            end_x=end_x,
+            end_y=end_y,
+            motion_label=motion_label,
+        )
+
+
+class AgentMotionPredictionHandler(_BaseQueryHandler):
+    """Handles qa_type_id 16 agent-motion-prediction questions."""
+
+    task_type = BenchmarkTaskType.AGENT_MOTION_PREDICTION
+
+    def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
+        scene = sample.scene
+        other_agents = tuple(
+            agent for agent in scene.agents if agent.agent_id != scene.asker_agent_id
+        )
+        if other_agents:
+            rendered_predictions = "; ".join(
+                self._render_agent_motion(agent)
+                for agent in other_agents
+            )
+            return BenchmarkAnswer(
+                sample_id=sample.sample_id,
+                task_type=self.task_type,
+                answer_text=f"Predicted agent motion: {rendered_predictions}.",
+                object_ids=tuple(agent.agent_id for agent in other_agents),
+                supported=True,
+            )
+
+        points = scene.future_trajectory.points
+        if not points:
+            return BenchmarkAnswer(
+                sample_id=sample.sample_id,
+                task_type=self.task_type,
+                answer_text="There is no agent trajectory context available for motion prediction.",
+                object_ids=(),
+                supported=True,
+            )
+
+        motion_label = self._trajectory_motion_label(scene)
+        final_point = points[-1]
+        return BenchmarkAnswer(
+            sample_id=sample.sample_id,
+            task_type=self.task_type,
+            answer_text=(
+                "Predicted agent motion: "
+                f"{scene.asker_agent_id}={motion_label} toward "
+                f"({final_point.x:.1f}, {final_point.y:.1f})."
+            ),
+            object_ids=(scene.asker_agent_id,),
+            supported=True,
+        )
+
+    @staticmethod
+    def _render_agent_motion(agent) -> str:
+        if agent.velocity is not None:
+            speed = (agent.velocity.x**2 + agent.velocity.y**2) ** 0.5
+            if speed >= 0.1:
+                if abs(agent.velocity.x) >= abs(agent.velocity.y):
+                    motion_label = "move forward" if agent.velocity.x >= 0.0 else "move backward"
+                else:
+                    motion_label = "move right" if agent.velocity.y >= 0.0 else "move left"
+
+                end_x = agent.pose.position.x + agent.velocity.x
+                end_y = agent.pose.position.y + agent.velocity.y
+                return (
+                    f"{agent.agent_id}={motion_label} from "
+                    f"({agent.pose.position.x:.1f}, {agent.pose.position.y:.1f}) "
+                    f"to ({end_x:.1f}, {end_y:.1f})"
+                )
+
+        if agent.planned_trajectory is None or not agent.planned_trajectory.points:
+            return (
+                f"{agent.agent_id}=hold position near "
+                f"({agent.pose.position.x:.1f}, {agent.pose.position.y:.1f})"
+            )
+
+        final_point = agent.planned_trajectory.points[-1]
+        dx = final_point.x
+        dy = final_point.y
+        if abs(dx) < 0.1 and abs(dy) < 0.1:
+            motion_label = "hold position"
+        elif abs(dx) >= abs(dy):
+            motion_label = "move forward" if dx >= 0.0 else "move backward"
+        else:
+            motion_label = "move right" if dy >= 0.0 else "move left"
+        end_x = agent.pose.position.x + final_point.x
+        end_y = agent.pose.position.y + final_point.y
+        return (
+            f"{agent.agent_id}={motion_label} from "
+            f"({agent.pose.position.x:.1f}, {agent.pose.position.y:.1f}) "
+            f"to ({end_x:.1f}, {end_y:.1f})"
+        )
+
+    @staticmethod
+    def _trajectory_motion_label(scene) -> str:
+        asker = next((agent for agent in scene.agents if agent.agent_id == scene.asker_agent_id), None)
+        points = scene.future_trajectory.points
+        if asker is None or not points:
+            return "continue along planned trajectory"
+
+        dx = points[-1].x - asker.pose.position.x
+        dy = points[-1].y - asker.pose.position.y
+        if abs(dx) >= abs(dy):
+            return "move forward" if dx >= 0.0 else "move backward"
+        return "move right" if dy >= 0.0 else "move left"
+
+
+class FutureTrajectoryHandler(_BaseQueryHandler):
+    """Handles qa_type_id 19 future-trajectory questions."""
+
+    task_type = BenchmarkTaskType.FUTURE_TRAJECTORY
+
+    def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
+        points = sample.scene.future_trajectory.points
+        if not points:
+            return BenchmarkAnswer(
+                sample_id=sample.sample_id,
+                task_type=self.task_type,
+                answer_text="There is no future trajectory available.",
+                object_ids=(),
+                supported=True,
+            )
+
+        rendered_points = ", ".join(
+            f"({point.x:.1f}, {point.y:.1f})" for point in points
+        )
+        return BenchmarkAnswer(
+            sample_id=sample.sample_id,
+            task_type=self.task_type,
+            answer_text=f"Suggested future trajectory: [{rendered_points}].",
+            object_ids=(),
+            supported=True,
+        )
+
+
+@dataclass(frozen=True)
+class ControlSettingsDecision:
+    """Structured output for control-settings recommendations."""
+
+    speed_instruction: str
+    steering_instruction: str
+    object_ids: tuple[str, ...]
+
+
+class ControlSettingsHandler(_BaseQueryHandler):
+    """Handles qa_type_id 18 control-settings questions."""
+
+    task_type = BenchmarkTaskType.CONTROL_SETTINGS
+
+    def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
+        decision = self._decide(sample)
+        if not decision.object_ids:
+            return BenchmarkAnswer(
+                sample_id=sample.sample_id,
+                task_type=self.task_type,
+                answer_text=(
+                    "Suggested control settings: maintain current speed and keep steering stable."
+                ),
+                object_ids=(),
+                supported=True,
+            )
+
+        rendered_objects = ", ".join(decision.object_ids)
+        return BenchmarkAnswer(
+            sample_id=sample.sample_id,
+            task_type=self.task_type,
+            answer_text=(
+                "Suggested control settings: "
+                f"speed={decision.speed_instruction}; "
+                f"steering={decision.steering_instruction}; "
+                f"key objects: {rendered_objects}."
+            ),
+            object_ids=decision.object_ids,
+            supported=True,
+        )
+
+    def _decide(self, sample: BenchmarkSample) -> ControlSettingsDecision:
+        scene = sample.scene
+        asker = next((agent for agent in scene.agents if agent.agent_id == scene.asker_agent_id), None)
+        if asker is None:
+            return ControlSettingsDecision(
+                speed_instruction="maintain current speed",
+                steering_instruction="keep steering stable",
+                object_ids=(),
+            )
+
+        visibility_by_object = self._visibility_lookup(scene, scene.asker_agent_id)
+        ranked_objects = sorted(
+            scene.object_tracks,
+            key=lambda object_track: (
+                -self._control_risk_score(scene, object_track, visibility_by_object),
+                self._distance_to_trajectory(scene, object_track),
+                object_track.object_id,
+            ),
+        )
+        top_objects = tuple(
+            object_track
+            for object_track in ranked_objects
+            if self._control_risk_score(scene, object_track, visibility_by_object) >= 0.35
+        )[:2]
+        if not top_objects:
+            top_objects = tuple(ranked_objects[:1])
+        if not top_objects:
+            return ControlSettingsDecision(
+                speed_instruction="maintain current speed",
+                steering_instruction="keep steering stable",
+                object_ids=(),
+            )
+
+        top_object = top_objects[0]
+        min_distance_to_trajectory = self._distance_to_trajectory(scene, top_object)
+        visibility_state = visibility_by_object.get(top_object.object_id)
+
+        if min_distance_to_trajectory <= 4.0 or visibility_state == VisibilityState.OCCLUDED:
+            speed_instruction = "reduce speed sharply"
+        elif min_distance_to_trajectory <= 8.0 or visibility_state == VisibilityState.UNCERTAIN:
+            speed_instruction = "slow down"
+        else:
+            speed_instruction = "maintain current speed"
+
+        steering_instruction = self._steering_instruction(asker, top_object)
+        return ControlSettingsDecision(
+            speed_instruction=speed_instruction,
+            steering_instruction=steering_instruction,
+            object_ids=tuple(object_track.object_id for object_track in top_objects),
+        )
+
+    def _control_risk_score(
+        self,
+        scene,
+        object_track,
+        visibility_by_object: dict[str, VisibilityState],
+    ) -> float:
+        distance_to_trajectory = self._distance_to_trajectory(scene, object_track)
+        distance_to_asker = self._distance_to_asker(scene, object_track)
+        visibility_state = visibility_by_object.get(object_track.object_id)
+        score = 1.0 / (1.0 + distance_to_trajectory)
+        score += 0.5 / (1.0 + distance_to_asker)
+        if visibility_state == VisibilityState.OCCLUDED:
+            score += 0.20
+        elif visibility_state == VisibilityState.UNCERTAIN:
+            score += 0.10
+        if object_track.status == TrackStatus.CANDIDATE:
+            score -= 0.05
+        if scene.asker_agent_id in object_track.provenance.source_agent_ids:
+            score += 0.05
+        if len(object_track.provenance.source_agent_ids) >= 2:
+            score += 0.05
+        return score
+
+    @staticmethod
+    def _steering_instruction(asker, object_track) -> str:
+        lateral_offset = object_track.position.y - asker.pose.position.y
+        if lateral_offset > 0.1:
+            return "steer right"
+        if lateral_offset < -0.1:
+            return "steer left"
+        return "keep steering centered"
 
 
 class PlanningAwarenessHandler(_BaseQueryHandler):
