@@ -18,6 +18,8 @@ class RelationBuilder:
         self,
         scene: CooperativeScene,
         near_ego_distance: float = 10.0,
+        near_first_waypoint_distance: float = 6.0,
+        path_relevant_distance: float = 4.0,
     ) -> CooperativeScene:
         """Return a new scene with derived relation facts populated."""
 
@@ -82,6 +84,52 @@ class RelationBuilder:
                         confidence=1.0,
                     )
                 )
+            first_waypoint_confidence = self._waypoint_proximity_confidence(
+                scene,
+                object_track.position,
+                max_distance=near_first_waypoint_distance,
+            )
+            if first_waypoint_confidence > 0.0:
+                relation_facts.append(
+                    RelationFact(
+                        subject_id=object_track.object_id,
+                        relation_type=RelationType.NEAR_FIRST_WAYPOINT,
+                        object_id=scene.asker_agent_id,
+                        confidence=first_waypoint_confidence,
+                    )
+                )
+            path_relevant_confidence = self._path_relevance_confidence(
+                scene,
+                object_track.position,
+                max_distance=path_relevant_distance,
+            )
+            if path_relevant_confidence > 0.0:
+                relation_facts.append(
+                    RelationFact(
+                        subject_id=object_track.object_id,
+                        relation_type=RelationType.PATH_RELEVANT,
+                        object_id=scene.asker_agent_id,
+                        confidence=path_relevant_confidence,
+                    )
+                )
+            if len(object_track.provenance.source_agent_ids) >= 2:
+                relation_facts.append(
+                    RelationFact(
+                        subject_id=object_track.object_id,
+                        relation_type=RelationType.COOPERATIVELY_SUPPORTED,
+                        object_id=scene.asker_agent_id,
+                        confidence=min(1.0, 0.5 + 0.2 * len(object_track.provenance.source_agent_ids)),
+                    )
+                )
+            if object_track.conflict_score <= 0.5:
+                relation_facts.append(
+                    RelationFact(
+                        subject_id=object_track.object_id,
+                        relation_type=RelationType.LOW_CONFLICT,
+                        object_id=scene.asker_agent_id,
+                        confidence=max(0.0, min(1.0, 1.0 - object_track.conflict_score)),
+                    )
+                )
 
         return replace(scene, relations=tuple(relation_facts))
 
@@ -107,3 +155,33 @@ class RelationBuilder:
     def _near_confidence(reference: Point2D, position: Point2D, max_distance: float) -> float:
         distance = dist((reference.x, reference.y), (position.x, position.y))
         return max(0.0, min(1.0, 1.0 - (distance / max_distance)))
+
+    @staticmethod
+    def _waypoint_proximity_confidence(
+        scene: CooperativeScene,
+        position: Point2D,
+        max_distance: float,
+    ) -> float:
+        if not scene.future_trajectory.points:
+            return 0.0
+        first_point = scene.future_trajectory.points[0]
+        distance = dist((position.x, position.y), (first_point.x, first_point.y))
+        if distance > max_distance:
+            return 0.0
+        return max(0.0, min(1.0, 1.0 - (distance / max_distance)))
+
+    @staticmethod
+    def _path_relevance_confidence(
+        scene: CooperativeScene,
+        position: Point2D,
+        max_distance: float,
+    ) -> float:
+        if not scene.future_trajectory.points:
+            return 0.0
+        best_distance = min(
+            dist((position.x, position.y), (point.x, point.y))
+            for point in scene.future_trajectory.points
+        )
+        if best_distance > max_distance:
+            return 0.0
+        return max(0.0, min(1.0, 1.0 - (best_distance / max_distance)))

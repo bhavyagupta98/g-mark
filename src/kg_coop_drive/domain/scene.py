@@ -14,6 +14,10 @@ class RelationType(str, Enum):
     NEAR = "near"
     OBSERVED_BY = "observed_by"
     NEAR_TRAJECTORY = "near_trajectory"
+    NEAR_FIRST_WAYPOINT = "near_first_waypoint"
+    PATH_RELEVANT = "path_relevant"
+    COOPERATIVELY_SUPPORTED = "cooperatively_supported"
+    LOW_CONFLICT = "low_conflict"
 
 
 class VisibilityState(str, Enum):
