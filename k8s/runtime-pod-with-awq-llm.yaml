@@ -47,6 +47,7 @@ spec:
           export KG_LOCAL_LLM_MODEL="Qwen/Qwen2.5-3B-Instruct-AWQ"
           export KG_LOCAL_LLM_API_KEY="local-token"
           export HF_HOME="/workspace/hf-cache"
+          export HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
           export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
           echo "[INFO] Installing runtime dependencies..."
@@ -56,7 +57,6 @@ spec:
             python3 \
             python3-numpy \
             python3-pip \
-            python3-pytest \
             python3-venv \
             git \
             less \
@@ -89,13 +89,22 @@ spec:
           check_path "Phase 5 evaluator" "${KG_REPO_DIR}/scripts/evaluate_v2vgotqa_phase5a.py"
           check_path "Local LLM client" "${KG_REPO_DIR}/src/kg_coop_drive/infrastructure/local_llm_client.py"
 
+          echo "[INFO] Preparing isolated project test environment..."
+          python3 -m venv "${WORKSPACE}/kg-test-venv"
+          "${WORKSPACE}/kg-test-venv/bin/python" -m pip install --upgrade pip setuptools wheel
+          "${WORKSPACE}/kg-test-venv/bin/python" -m pip install -e "${KG_REPO_DIR}[dev]"
+          echo "[INFO] Test Python: ${WORKSPACE}/kg-test-venv/bin/python"
+          echo "[INFO] Test command example:"
+          echo "[INFO] ${WORKSPACE}/kg-test-venv/bin/python -m pytest ${KG_REPO_DIR}/tests/test_v2vgotqa_router.py"
+
           echo "[INFO] Starting local AWQ vLLM server..."
           python3 -m vllm.entrypoints.openai.api_server \
             --model "${KG_LOCAL_LLM_MODEL}" \
+            --download-dir "${HF_HOME}" \
             --host 0.0.0.0 \
             --port 8000 \
             --dtype half \
-            --quantization awq \
+            --quantization awq_marlin \
             --max-model-len 2048 \
             --gpu-memory-utilization 0.70 \
             --max-num-seqs 2 \
@@ -134,15 +143,28 @@ spec:
           echo "[INFO] vLLM log: /tmp/awq_vllm.log"
           echo "[INFO] Model list response: /tmp/awq_models.json"
           echo "[INFO] Endpoint from inside pod: ${KG_LOCAL_LLM_BASE_URL}"
+          echo "[INFO] Test venv: ${WORKSPACE}/kg-test-venv"
           echo "[INFO] Example:"
           echo "[INFO] python3 scripts/evaluate_v2vgotqa_phase5a.py --split val --limit 10 --baseline-mode cooperative --task-type planning_awareness --planning-ranker llm --planning-selection-policy top2 --llm-base-url ${KG_LOCAL_LLM_BASE_URL} --llm-model ${KG_LOCAL_LLM_MODEL} --llm-api-key ${KG_LOCAL_LLM_API_KEY}"
+          echo "[INFO] Test example:"
+          echo "[INFO] ${WORKSPACE}/kg-test-venv/bin/python -m pytest tests/test_v2vgotqa_router.py"
 
           tail -f /tmp/awq_vllm.log
       env:
+        - name: HF_HOME
+          value: /workspace/hf-cache
+        - name: HF_HUB_CACHE
+          value: /workspace/hf-cache/hub
         - name: HUGGING_FACE_HUB_TOKEN
           valueFrom:
             secretKeyRef:
-              name: huggingface-token
+              name: bgupta-huggingface-token
+              key: token
+              optional: true
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: bgupta-huggingface-token
               key: token
               optional: true
       ports:

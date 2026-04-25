@@ -163,6 +163,8 @@ class V2VGoTQARouter:
 class _BaseQueryHandler:
     """Shared helpers for benchmark task handlers."""
 
+    _visible_notable_max_distance = 7.0
+
     def __init__(self) -> None:
         self._engine = SceneQueryEngine()
 
@@ -380,7 +382,7 @@ class _BaseQueryHandler:
         if role == "visible_relevant":
             for object_track in visible_objects:
                 distance_to_trajectory = self._distance_to_trajectory(scene, object_track)
-                if distance_to_trajectory > 4.0:
+                if distance_to_trajectory > self._visible_notable_max_distance:
                     continue
                 distance_to_asker = self._distance_to_asker(scene, object_track)
                 distance_to_first_waypoint = self._distance_to_first_waypoint(scene, object_track)
@@ -565,7 +567,7 @@ class _BaseQueryHandler:
         role_scores: list[_RoleScoredObject] = []
         for object_track in visible_objects:
             distance_to_trajectory = self._distance_to_trajectory(scene, object_track)
-            if distance_to_trajectory > 4.0:
+            if distance_to_trajectory > self._visible_notable_max_distance:
                 continue
             distance_to_asker = self._distance_to_asker(scene, object_track)
             distance_to_first_waypoint = self._distance_to_first_waypoint(scene, object_track)
@@ -774,6 +776,17 @@ class _BaseQueryHandler:
             supported=True,
         )
 
+    @staticmethod
+    def _prefer_grounded_objects(result: QueryResult) -> QueryResult:
+        grounded_objects = tuple(
+            object_track
+            for object_track in result.objects
+            if object_track.status != TrackStatus.CANDIDATE
+        )
+        if grounded_objects:
+            return QueryResult(scene=result.scene, objects=grounded_objects)
+        return result
+
 
 class NotableObjectsHandler(_BaseQueryHandler):
     """Handles qa_type_id 11 notable-object questions."""
@@ -798,6 +811,7 @@ class NotableObjectsHandler(_BaseQueryHandler):
             if self._ranker == "energy"
             else self._top_notable_visible(sample)
         )
+        result = self._prefer_grounded_objects(result)
         return self._render_objects(
             sample,
             task_type=self.task_type,

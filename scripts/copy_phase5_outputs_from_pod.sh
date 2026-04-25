@@ -6,8 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 NAMESPACE="${NAMESPACE:-seelab}"
-POD_NAME="${POD_NAME:-kg-coop-runtime-awq-llm}"
-REMOTE_DIR="${1:-/workspace/repos/kg_coop_drive/outputs/phase5_closeout_awq_full_sweep}"
+POD_NAME="${POD_NAME:-kg-coop-runtime}"
+REMOTE_DIR="${1:-/workspace/repos/kg_coop_drive/outputs/phase8_baselines}"
 LOCAL_DIR="${2:-${REPO_ROOT}/outputs/$(basename "${REMOTE_DIR}")}"
 
 mkdir -p "$(dirname "${LOCAL_DIR}")"

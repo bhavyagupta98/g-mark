@@ -21,6 +21,7 @@ from kg_coop_drive.domain.scene import (
     Point2D,
     Pose2D,
     ProvenanceRecord,
+    TrackStatus,
     Trajectory,
     Vector2D,
     VisibilityFact,
@@ -178,6 +179,119 @@ def _scene_with_competing_objects() -> CooperativeScene:
     )
 
 
+def _scene_with_late_path_visible_object() -> CooperativeScene:
+    return CooperativeScene(
+        scene_id="scene-3",
+        local_timestamp_index=0,
+        global_timestamp_index=0,
+        asker_agent_id="CAV_1",
+        agents=(
+            AgentContext(agent_id="CAV_EGO", pose=Pose2D(position=Point2D(0.0, 0.0))),
+            AgentContext(agent_id="CAV_1", pose=Pose2D(position=Point2D(-75.7, 5.2))),
+        ),
+        future_trajectory=Trajectory(
+            points=(
+                Point2D(-68.0, 3.4),
+                Point2D(-59.9, 1.4),
+                Point2D(-51.8, 0.5),
+                Point2D(-43.9, 0.6),
+                Point2D(-35.5, 0.4),
+                Point2D(-26.8, 0.3),
+            )
+        ),
+        object_tracks=(
+            ObjectTrack(
+                object_id="late-path-visible",
+                object_type="car",
+                position=Point2D(-21.1, 1.5),
+                confidence=0.95,
+                provenance=ProvenanceRecord(
+                    source_agent_ids=("CAV_1",),
+                    observation_ids=("obs-6",),
+                    latest_timestamp_index=0,
+                ),
+            ),
+            ObjectTrack(
+                object_id="far-off-visible",
+                object_type="car",
+                position=Point2D(-20.0, 10.0),
+                confidence=0.95,
+                provenance=ProvenanceRecord(
+                    source_agent_ids=("CAV_1",),
+                    observation_ids=("obs-7",),
+                    latest_timestamp_index=0,
+                ),
+            ),
+        ),
+        visibility_facts=(
+            VisibilityFact(
+                agent_id="CAV_1",
+                object_id="late-path-visible",
+                state=VisibilityState.VISIBLE,
+            ),
+            VisibilityFact(
+                agent_id="CAV_1",
+                object_id="far-off-visible",
+                state=VisibilityState.VISIBLE,
+            ),
+        ),
+    )
+
+
+def _scene_with_supported_and_candidate_visible_objects() -> CooperativeScene:
+    return CooperativeScene(
+        scene_id="scene-4",
+        local_timestamp_index=0,
+        global_timestamp_index=0,
+        asker_agent_id="CAV_EGO",
+        agents=(
+            AgentContext(agent_id="CAV_EGO", pose=Pose2D(position=Point2D(0.0, 0.0))),
+            AgentContext(agent_id="CAV_1", pose=Pose2D(position=Point2D(5.0, 0.0))),
+        ),
+        future_trajectory=Trajectory(
+            points=(Point2D(10.0, 0.0), Point2D(20.0, 0.0), Point2D(30.0, 0.0))
+        ),
+        object_tracks=(
+            ObjectTrack(
+                object_id="grounded-visible",
+                object_type="car",
+                position=Point2D(12.0, 0.6),
+                confidence=0.95,
+                provenance=ProvenanceRecord(
+                    source_agent_ids=("GT", "CAV_EGO"),
+                    observation_ids=("obs-8",),
+                    latest_timestamp_index=0,
+                ),
+                status=TrackStatus.SUPPORTED,
+            ),
+            ObjectTrack(
+                object_id="candidate-visible",
+                object_type="car",
+                position=Point2D(12.5, 0.5),
+                confidence=0.99,
+                provenance=ProvenanceRecord(
+                    source_agent_ids=("CAV_EGO",),
+                    observation_ids=("obs-9",),
+                    latest_timestamp_index=0,
+                ),
+                status=TrackStatus.CANDIDATE,
+            ),
+        ),
+        visibility_facts=(
+            VisibilityFact(
+                agent_id="CAV_EGO",
+                object_id="grounded-visible",
+                state=VisibilityState.VISIBLE,
+            ),
+            VisibilityFact(
+                agent_id="CAV_EGO",
+                object_id="candidate-visible",
+                state=VisibilityState.VISIBLE,
+            ),
+        ),
+    )
+
+
 def _sample_with_scene(task_type: BenchmarkTaskType, scene: CooperativeScene) -> BenchmarkSample:
     return BenchmarkSample(
         sample_id=f"sample-{task_type.value}-custom",
@@ -269,6 +383,31 @@ def test_v2vgotqa_router_supports_llm_ranker_for_notable_objects() -> None:
 
     assert answer.supported is True
     assert answer.object_ids[0] == "good-visible"
+
+
+def test_v2vgotqa_router_keeps_late_path_visible_object_for_notable_objects() -> None:
+    router = V2VGoTQARouter()
+
+    answer = router.answer(
+        _sample_with_scene(BenchmarkTaskType.NOTABLE_OBJECTS, _scene_with_late_path_visible_object())
+    )
+
+    assert answer.supported is True
+    assert answer.object_ids == ("late-path-visible",)
+
+
+def test_v2vgotqa_router_prefers_grounded_visible_objects_over_candidates_for_notable_objects() -> None:
+    router = V2VGoTQARouter()
+
+    answer = router.answer(
+        _sample_with_scene(
+            BenchmarkTaskType.NOTABLE_OBJECTS,
+            _scene_with_supported_and_candidate_visible_objects(),
+        )
+    )
+
+    assert answer.supported is True
+    assert answer.object_ids == ("grounded-visible",)
 
 
 def test_v2vgotqa_router_answers_occluding_objects() -> None:

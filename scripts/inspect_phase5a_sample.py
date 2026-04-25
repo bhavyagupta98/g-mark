@@ -25,7 +25,7 @@ from kg_coop_drive.application.v2vgotqa_router import (
     PlanningAwarenessHandler,
     V2VGoTQARouter,
 )
-from kg_coop_drive.domain.benchmark import BenchmarkTaskType
+from kg_coop_drive.domain.benchmark import BenchmarkSample, BenchmarkTaskType
 from kg_coop_drive.domain.scene import TrackStatus, VisibilityState
 from kg_coop_drive.infrastructure.local_llm_client import (
     LocalOpenAICompatibleLLMClient,
@@ -132,6 +132,57 @@ def filter_sample_visibility(scene, object_id: str, agent_id: str) -> tuple[str,
             states.append(fact.state.value)
     return tuple(states)
 
+def print_notable_debug(router: V2VGoTQARouter, prepared_sample: BenchmarkSample) -> None:
+    handler = router._handlers.get(BenchmarkTaskType.NOTABLE_OBJECTS)  # noqa: SLF001
+    if handler is None:
+        print("Notable Candidate Scores")
+        print("- notable handler unavailable")
+        return
+
+    print("Notable Candidate Scores")
+    ranked = handler._notable_role_scores(prepared_sample, max_results=8)  # noqa: SLF001
+    if not ranked:
+        print("- none")
+    else:
+        for item in ranked:
+            print(
+                f"- object_id={item.object_track.object_id}, score={item.score:.3f}, "
+                f"distance_to_trajectory={item.distance_to_trajectory:.2f}, "
+                f"distance_to_asker={item.distance_to_asker:.2f}, "
+                f"support_count={item.support_count}, status={item.object_track.status.value}, "
+                f"visibility={item.visibility_state.value if item.visibility_state is not None else 'unknown'}"
+            )
+
+    print("Visible Track Distances")
+    visibility_by_object = {
+        fact.object_id: fact.state
+        for fact in prepared_sample.scene.visibility_facts
+        if fact.agent_id == prepared_sample.scene.asker_agent_id
+    }
+    visible_tracks = [
+        track
+        for track in prepared_sample.scene.object_tracks
+        if visibility_by_object.get(track.object_id) == VisibilityState.VISIBLE
+    ]
+    visible_tracks.sort(
+        key=lambda track: (
+            handler._distance_to_trajectory(prepared_sample.scene, track),  # noqa: SLF001
+            handler._distance_to_asker(prepared_sample.scene, track),  # noqa: SLF001
+            track.object_id,
+        )
+    )
+    if not visible_tracks:
+        print("- none")
+    else:
+        for track in visible_tracks[:12]:
+            print(
+                f"- object_id={track.object_id}, position=({track.position.x:.2f}, {track.position.y:.2f}), "
+                f"distance_to_trajectory={handler._distance_to_trajectory(prepared_sample.scene, track):.2f}, "  # noqa: SLF001
+                f"distance_to_first_waypoint={handler._distance_to_first_waypoint(prepared_sample.scene, track):.2f}, "  # noqa: SLF001
+                f"distance_to_asker={handler._distance_to_asker(prepared_sample.scene, track):.2f}, "  # noqa: SLF001
+                f"status={track.status.value}, confidence={track.confidence:.2f}"
+            )
+
 
 def main() -> None:
     args = build_parser().parse_args()
@@ -227,6 +278,8 @@ def main() -> None:
                         f"status={candidate.object_track.status.value}, "
                         f"rationale={list(candidate.rationale)}"
                     )
+        elif task_type == BenchmarkTaskType.NOTABLE_OBJECTS:
+            print_notable_debug(evaluator._router, prepared_sample)  # noqa: SLF001
 
         print("Selected Object Details")
         selected_tracks = {

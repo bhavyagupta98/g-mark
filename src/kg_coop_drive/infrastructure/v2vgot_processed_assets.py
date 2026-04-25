@@ -289,7 +289,7 @@ class V2VGoTProcessedAssetLoader:
                         observation_id=f"{path}::obs_{cav_id}_{timestamp_index}_{index}",
                         source_agent_id=agent_id,
                         object_type="car",
-                        position=Point2D(x=float(feature[3]), y=float(feature[5])),
+                        position=Point2D(x=float(feature[3]), y=float(feature[4])),
                         confidence=float(feature[7]),
                         timestamp_index=timestamp_index,
                     )
@@ -395,7 +395,7 @@ class V2VGoTProcessedAssetLoader:
         timestamp_index: int,
     ) -> ObjectTrack:
         center = np.mean(corners, axis=0)
-        position = Point2D(x=float(center[0]), y=float(center[2]))
+        position = Point2D(x=float(center[0]), y=float(center[1]))
         provenance = ProvenanceRecord(
             source_agent_ids=("GT",),
             observation_ids=(f"gt_{object_id}_{timestamp_index}",),

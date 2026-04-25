@@ -21,14 +21,14 @@ def test_processed_scene_loader_builds_tracks_and_visibility(tmp_path: Path) -> 
     corners = np.array(
         [
             [
-                [9.0, 0.0, 1.0],
-                [11.0, 0.0, 1.0],
-                [11.0, 0.0, -1.0],
-                [9.0, 0.0, -1.0],
-                [9.0, 2.0, 1.0],
-                [11.0, 2.0, 1.0],
-                [11.0, 2.0, -1.0],
-                [9.0, 2.0, -1.0],
+                [9.0, 4.0, 1.0],
+                [11.0, 4.0, 1.0],
+                [11.0, 4.0, -1.0],
+                [9.0, 4.0, -1.0],
+                [9.0, 6.0, 1.0],
+                [11.0, 6.0, 1.0],
+                [11.0, 6.0, -1.0],
+                [9.0, 6.0, -1.0],
             ]
         ]
     )
@@ -41,7 +41,7 @@ def test_processed_scene_loader_builds_tracks_and_visibility(tmp_path: Path) -> 
     (npy_root / "co_llm" / "ego").mkdir(parents=True)
     np.save(
         npy_root / "co_llm" / "ego" / "0000_detection_box_score.npy",
-        np.array([[1.7, 2.0, 4.0, 10.0, 0.0, 0.0, 0.0, 0.9]]),
+        np.array([[1.7, 2.0, 4.0, 10.0, 3.0, -8.0, 0.0, 0.9]]),
     )
 
     loader = V2VGoTProcessedAssetLoader(str(tmp_path))
@@ -55,7 +55,9 @@ def test_processed_scene_loader_builds_tracks_and_visibility(tmp_path: Path) -> 
     assert len(data.object_tracks) == 1
     assert data.object_tracks[0].object_id == "101"
     assert data.object_tracks[0].position.x == 10.0
-    assert data.object_tracks[0].position.y == 0.0
+    assert data.object_tracks[0].position.y == 5.0
+    assert data.observations[0].position.x == 10.0
+    assert data.observations[0].position.y == 3.0
     assert len(data.visibility_facts) == 2
 
 
@@ -151,14 +153,14 @@ def test_processed_scene_loader_reads_per_agent_prediction_files(tmp_path: Path)
     pred_corners = np.array(
         [
             [
-                [9.0, 0.0, 1.0],
-                [11.0, 0.0, 1.0],
-                [11.0, 0.0, -1.0],
-                [9.0, 0.0, -1.0],
-                [9.0, 2.0, 1.0],
-                [11.0, 2.0, 1.0],
-                [11.0, 2.0, -1.0],
-                [9.0, 2.0, -1.0],
+                [9.0, 7.0, 1.0],
+                [11.0, 7.0, 1.0],
+                [11.0, 7.0, -1.0],
+                [9.0, 7.0, -1.0],
+                [9.0, 9.0, 1.0],
+                [11.0, 9.0, 1.0],
+                [11.0, 9.0, -1.0],
+                [9.0, 9.0, -1.0],
             ]
         ]
     )
@@ -174,3 +176,5 @@ def test_processed_scene_loader_reads_per_agent_prediction_files(tmp_path: Path)
     assert len(data.observations) == 1
     assert data.observations[0].source_agent_id == "CAV_EGO"
     assert data.observations[0].confidence == 0.75
+    assert data.observations[0].position.x == 10.0
+    assert data.observations[0].position.y == 8.0

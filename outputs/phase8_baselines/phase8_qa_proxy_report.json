@@ -1,0 +1,364 @@
+{
+  "repository_root": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+  "manifest": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_baselines/phase8_qa_baseline_manifest.json",
+  "split": "val",
+  "tasks": {
+    "notable_objects": {
+      "summary": {
+        "task_type": "notable_objects",
+        "total_samples": 100,
+        "reference_positive": 50,
+        "predicted_positive": 33,
+        "true_positive": 33,
+        "false_positive": 0,
+        "false_negative": 17,
+        "true_negative": 50,
+        "precision": 1.0,
+        "recall": 0.66,
+        "f1": 0.7951807228915663,
+        "exact_presence_matches": 83,
+        "exact_count_matches": 59,
+        "reference_coordinate_mentions": 50,
+        "predicted_object_mentions": 57,
+        "ambiguous_reference_samples": 0
+      },
+      "false_negative_examples": [
+        {
+          "sample_id": "1",
+          "question": "I am CAV_1 at (-75.7,5.2). What are the notable objects visible to me near my planned future trajectory [(-68.0,3.4),(-59.9,1.4),(-51.8,0.5),(-43.9,0.6),(-35.5,0.4),(-26.8,0.3)]? ",
+          "reference_answer": "There is a car at (-21.1,1.5) visible to you. ",
+          "predicted_answer": "There is no notable object visible to you near your planned future trajectory."
+        },
+        {
+          "sample_id": "3",
+          "question": "I am CAV_1 at (-75.9,4.8). What are the notable objects visible to me near my planned future trajectory [(-68.2,3.0),(-60.0,1.1),(-51.9,0.4),(-43.9,0.5),(-35.5,0.3),(-26.8,0.3)]? ",
+          "reference_answer": "There is a car at (-20.4,-0.1) visible to you. ",
+          "predicted_answer": "There is no notable object visible to you near your planned future trajectory."
+        },
+        {
+          "sample_id": "5",
+          "question": "I am CAV_1 at (-76.1,4.4). What are the notable objects visible to me near my planned future trajectory [(-68.8,2.2),(-60.1,0.9),(-52.3,0.8),(-44.0,0.4),(-35.5,0.3),(-26.8,0.2)]? ",
+          "reference_answer": "There is a car at (-20.3,-0.0) visible to you. ",
+          "predicted_answer": "There is no notable object visible to you near your planned future trajectory."
+        },
+        {
+          "sample_id": "7",
+          "question": "I am CAV_1 at (-76.2,4.0). What are the notable objects visible to me near my planned future trajectory [(-68.9,1.9),(-60.3,0.7),(-54.0,0.8),(-44.0,0.4),(-35.5,0.2),(-26.7,0.2)]? ",
+          "reference_answer": "There is a car at (-20.2,-0.0) visible to you. ",
+          "predicted_answer": "There is no notable object visible to you near your planned future trajectory."
+        },
+        {
+          "sample_id": "9",
+          "question": "I am CAV_1 at (-76.4,3.6). What are the notable objects visible to me near my planned future trajectory [(-68.4,1.5),(-60.4,0.5),(-52.4,0.6),(-44.0,0.3),(-35.4,0.2),(-26.7,0.2)]? ",
+          "reference_answer": "There is a car at (-20.2,-0.0) visible to you. ",
+          "predicted_answer": "There is no notable object visible to you near your planned future trajectory."
+        }
+      ],
+      "false_positive_examples": [],
+      "count_mismatch_examples": [
+        {
+          "sample_id": "1",
+          "question": "I am CAV_1 at (-75.7,5.2). What are the notable objects visible to me near my planned future trajectory [(-68.0,3.4),(-59.9,1.4),(-51.8,0.5),(-43.9,0.6),(-35.5,0.4),(-26.8,0.3)]? ",
+          "reference_answer": "There is a car at (-21.1,1.5) visible to you. ",
+          "reference_count": 1,
+          "predicted_count": 0,
+          "predicted_ids": []
+        },
+        {
+          "sample_id": "3",
+          "question": "I am CAV_1 at (-75.9,4.8). What are the notable objects visible to me near my planned future trajectory [(-68.2,3.0),(-60.0,1.1),(-51.9,0.4),(-43.9,0.5),(-35.5,0.3),(-26.8,0.3)]? ",
+          "reference_answer": "There is a car at (-20.4,-0.1) visible to you. ",
+          "reference_count": 1,
+          "predicted_count": 0,
+          "predicted_ids": []
+        },
+        {
+          "sample_id": "5",
+          "question": "I am CAV_1 at (-76.1,4.4). What are the notable objects visible to me near my planned future trajectory [(-68.8,2.2),(-60.1,0.9),(-52.3,0.8),(-44.0,0.4),(-35.5,0.3),(-26.8,0.2)]? ",
+          "reference_answer": "There is a car at (-20.3,-0.0) visible to you. ",
+          "reference_count": 1,
+          "predicted_count": 0,
+          "predicted_ids": []
+        },
+        {
+          "sample_id": "7",
+          "question": "I am CAV_1 at (-76.2,4.0). What are the notable objects visible to me near my planned future trajectory [(-68.9,1.9),(-60.3,0.7),(-54.0,0.8),(-44.0,0.4),(-35.5,0.2),(-26.7,0.2)]? ",
+          "reference_answer": "There is a car at (-20.2,-0.0) visible to you. ",
+          "reference_count": 1,
+          "predicted_count": 0,
+          "predicted_ids": []
+        },
+        {
+          "sample_id": "9",
+          "question": "I am CAV_1 at (-76.4,3.6). What are the notable objects visible to me near my planned future trajectory [(-68.4,1.5),(-60.4,0.5),(-52.4,0.6),(-44.0,0.3),(-35.4,0.2),(-26.7,0.2)]? ",
+          "reference_answer": "There is a car at (-20.2,-0.0) visible to you. ",
+          "reference_count": 1,
+          "predicted_count": 0,
+          "predicted_ids": []
+        }
+      ]
+    },
+    "occluding_objects": {
+      "summary": {
+        "task_type": "occluding_objects",
+        "total_samples": 100,
+        "reference_positive": 100,
+        "predicted_positive": 96,
+        "true_positive": 96,
+        "false_positive": 0,
+        "false_negative": 4,
+        "true_negative": 0,
+        "precision": 1.0,
+        "recall": 0.96,
+        "f1": 0.9795918367346939,
+        "exact_presence_matches": 96,
+        "exact_count_matches": 39,
+        "reference_coordinate_mentions": 252,
+        "predicted_object_mentions": 186,
+        "ambiguous_reference_samples": 0
+      },
+      "false_negative_examples": [
+        {
+          "sample_id": "28",
+          "question": "I am CAV_EGO at (0.0,-0.0). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-47.8,20.7) obstructing your view. There is a car at (-19.6,-0.0) obstructing your view. ",
+          "predicted_answer": "There is no object currently marked as obstructing your view."
+        },
+        {
+          "sample_id": "29",
+          "question": "I am CAV_1 at (-77.7,-0.4). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-47.8,20.7) obstructing your view. There is a car at (-19.6,-0.0) obstructing your view. ",
+          "predicted_answer": "There is no object currently marked as obstructing your view."
+        },
+        {
+          "sample_id": "32",
+          "question": "I am CAV_EGO at (0.0,0.0). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-46.7,20.0) obstructing your view. There is a car at (-19.5,-0.0) obstructing your view. ",
+          "predicted_answer": "There is no object currently marked as obstructing your view."
+        },
+        {
+          "sample_id": "33",
+          "question": "I am CAV_1 at (-77.9,-1.2). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-46.7,20.0) obstructing your view. There is a car at (-19.5,-0.0) obstructing your view. ",
+          "predicted_answer": "There is no object currently marked as obstructing your view."
+        }
+      ],
+      "false_positive_examples": [],
+      "count_mismatch_examples": [
+        {
+          "sample_id": "0",
+          "question": "I am CAV_EGO at (0.0,0.0). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-21.1,1.5) obstructing your view. There is a car at (-20.5,-0.1) obstructing your view. ",
+          "reference_count": 2,
+          "predicted_count": 1,
+          "predicted_ids": [
+            "1"
+          ]
+        },
+        {
+          "sample_id": "1",
+          "question": "I am CAV_1 at (-75.7,5.2). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-21.1,1.5) obstructing your view. There is a car at (-20.5,-0.1) obstructing your view. ",
+          "reference_count": 2,
+          "predicted_count": 1,
+          "predicted_ids": [
+            "107"
+          ]
+        },
+        {
+          "sample_id": "2",
+          "question": "I am CAV_EGO at (0.0,0.0). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-55.4,24.9) obstructing your view. There is a car at (-20.4,-0.1) obstructing your view. ",
+          "reference_count": 2,
+          "predicted_count": 1,
+          "predicted_ids": [
+            "1"
+          ]
+        },
+        {
+          "sample_id": "5",
+          "question": "I am CAV_1 at (-76.1,4.4). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-55.4,23.9) obstructing your view. There is a car at (-20.3,-0.0) obstructing your view. ",
+          "reference_count": 2,
+          "predicted_count": 1,
+          "predicted_ids": [
+            "1"
+          ]
+        },
+        {
+          "sample_id": "7",
+          "question": "I am CAV_1 at (-76.2,4.0). What objects might obstruct my view?",
+          "reference_answer": "There is a car at (-54.7,23.6) obstructing your view. There is a car at (-20.2,-0.0) obstructing your view. ",
+          "reference_count": 2,
+          "predicted_count": 1,
+          "predicted_ids": [
+            "1"
+          ]
+        }
+      ]
+    },
+    "invisible_objects": {
+      "summary": {
+        "task_type": "invisible_objects",
+        "total_samples": 100,
+        "reference_positive": 7,
+        "predicted_positive": 6,
+        "true_positive": 6,
+        "false_positive": 0,
+        "false_negative": 1,
+        "true_negative": 93,
+        "precision": 1.0,
+        "recall": 0.8571428571428571,
+        "f1": 0.9230769230769231,
+        "exact_presence_matches": 99,
+        "exact_count_matches": 99,
+        "reference_coordinate_mentions": 7,
+        "predicted_object_mentions": 6,
+        "ambiguous_reference_samples": 0
+      },
+      "false_negative_examples": [
+        {
+          "sample_id": "1",
+          "question": "I am CAV_1 at (-75.7,5.2). What are the notable objects invisible to me near my planned future trajectory [(-68.0,3.4),(-59.9,1.4),(-51.8,0.5),(-43.9,0.6),(-35.5,0.4),(-26.8,0.3)]? Context: What objects might obstruct my view? There is a car at (-21.1,1.5) obstructing your view. There is a car at (-20.5,-0.1) obstructing your view. ",
+          "reference_answer": "There is a car at (-20.5,-0.1) invisible to you. ",
+          "predicted_answer": "There is no notable object invisible to you near your planned future trajectory."
+        }
+      ],
+      "false_positive_examples": [],
+      "count_mismatch_examples": [
+        {
+          "sample_id": "1",
+          "question": "I am CAV_1 at (-75.7,5.2). What are the notable objects invisible to me near my planned future trajectory [(-68.0,3.4),(-59.9,1.4),(-51.8,0.5),(-43.9,0.6),(-35.5,0.4),(-26.8,0.3)]? Context: What objects might obstruct my view? There is a car at (-21.1,1.5) obstructing your view. There is a car at (-20.5,-0.1) obstructing your view. ",
+          "reference_answer": "There is a car at (-20.5,-0.1) invisible to you. ",
+          "reference_count": 1,
+          "predicted_count": 0,
+          "predicted_ids": []
+        }
+      ]
+    },
+    "planning_awareness": {
+      "summary": {
+        "task_type": "planning_awareness",
+        "total_samples": 100,
+        "reference_positive": 50,
+        "predicted_positive": 91,
+        "true_positive": 50,
+        "false_positive": 41,
+        "false_negative": 0,
+        "true_negative": 9,
+        "precision": 0.5494505494505495,
+        "recall": 1.0,
+        "f1": 0.7092198581560284,
+        "exact_presence_matches": 59,
+        "exact_count_matches": 10,
+        "reference_coordinate_mentions": 57,
+        "predicted_object_mentions": 169,
+        "ambiguous_reference_samples": 0
+      },
+      "false_negative_examples": [],
+      "false_positive_examples": [
+        {
+          "sample_id": "0",
+          "question": "I am CAV_EGO at (0.0,0.0). Is there anything I need to be aware of if my planned future trajectory is [(8.6,0.2),(17.2,0.5),(26.0,0.7),(34.7,0.8),(43.6,0.8),(52.6,0.6)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is no notable object.",
+          "reference_answer": "There is no notable object.",
+          "predicted_answer": "Objects to be aware of: 107, 1.",
+          "predicted_ids": [
+            "107",
+            "1"
+          ]
+        },
+        {
+          "sample_id": "2",
+          "question": "I am CAV_EGO at (0.0,0.0). Is there anything I need to be aware of if my planned future trajectory is [(8.6,0.2),(17.3,0.5),(26.0,0.7),(34.8,0.7),(43.7,0.7),(52.7,0.5)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is no notable object.",
+          "reference_answer": "There is no notable object.",
+          "predicted_answer": "Objects to be aware of: 1.",
+          "predicted_ids": [
+            "1"
+          ]
+        },
+        {
+          "sample_id": "4",
+          "question": "I am CAV_EGO at (0.0,-0.0). Is there anything I need to be aware of if my planned future trajectory is [(8.6,0.2),(17.3,0.5),(26.0,0.6),(34.9,0.7),(43.8,0.6),(52.8,0.3)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is no notable object.",
+          "reference_answer": "There is no notable object.",
+          "predicted_answer": "Objects to be aware of: 1.",
+          "predicted_ids": [
+            "1"
+          ]
+        },
+        {
+          "sample_id": "6",
+          "question": "I am CAV_EGO at (0.0,-0.0). Is there anything I need to be aware of if my planned future trajectory is [(8.6,0.2),(17.3,0.5),(26.0,0.6),(34.9,0.6),(43.8,0.5),(52.9,0.2)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is no notable object.",
+          "reference_answer": "There is no notable object.",
+          "predicted_answer": "Objects to be aware of: 1.",
+          "predicted_ids": [
+            "1"
+          ]
+        },
+        {
+          "sample_id": "8",
+          "question": "I am CAV_EGO at (-0.0,-0.0). Is there anything I need to be aware of if my planned future trajectory is [(8.6,0.2),(17.3,0.4),(26.1,0.6),(35.0,0.5),(43.9,0.4),(53.0,-0.0)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is no notable object.",
+          "reference_answer": "There is no notable object.",
+          "predicted_answer": "Objects to be aware of: 1.",
+          "predicted_ids": [
+            "1"
+          ]
+        }
+      ],
+      "count_mismatch_examples": [
+        {
+          "sample_id": "0",
+          "question": "I am CAV_EGO at (0.0,0.0). Is there anything I need to be aware of if my planned future trajectory is [(8.6,0.2),(17.2,0.5),(26.0,0.7),(34.7,0.8),(43.6,0.8),(52.6,0.6)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is no notable object.",
+          "reference_answer": "There is no notable object.",
+          "reference_count": 0,
+          "predicted_count": 2,
+          "predicted_ids": [
+            "107",
+            "1"
+          ]
+        },
+        {
+          "sample_id": "2",
+          "question": "I am CAV_EGO at (0.0,0.0). Is there anything I need to be aware of if my planned future trajectory is [(8.6,0.2),(17.3,0.5),(26.0,0.7),(34.8,0.7),(43.7,0.7),(52.7,0.5)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is no notable object.",
+          "reference_answer": "There is no notable object.",
+          "reference_count": 0,
+          "predicted_count": 1,
+          "predicted_ids": [
+            "1"
+          ]
+        },
+        {
+          "sample_id": "3",
+          "question": "I am CAV_1 at (-75.9,4.8). Is there anything I need to be aware of if my planned future trajectory is [(-68.2,3.0),(-60.0,1.1),(-51.9,0.4),(-43.9,0.5),(-35.5,0.3),(-26.8,0.3)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is a car at (-20.4,-0.1) visible to you. ",
+          "reference_answer": "There is a car at (-20.4,-0.1). ",
+          "reference_count": 1,
+          "predicted_count": 2,
+          "predicted_ids": [
+            "104",
+            "1"
+          ]
+        },
+        {
+          "sample_id": "4",
+          "question": "I am CAV_EGO at (0.0,-0.0). Is there anything I need to be aware of if my planned future trajectory is [(8.6,0.2),(17.3,0.5),(26.0,0.6),(34.9,0.7),(43.8,0.6),(52.8,0.3)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is no notable object.",
+          "reference_answer": "There is no notable object.",
+          "reference_count": 0,
+          "predicted_count": 1,
+          "predicted_ids": [
+            "1"
+          ]
+        },
+        {
+          "sample_id": "5",
+          "question": "I am CAV_1 at (-76.1,4.4). Is there anything I need to be aware of if my planned future trajectory is [(-68.8,2.2),(-60.1,0.9),(-52.3,0.8),(-44.0,0.4),(-35.5,0.3),(-26.8,0.2)]? Context: Is there anything I need to be aware of given my planned future trajectory? There is a car at (-20.3,-0.0) visible to you. ",
+          "reference_answer": "There is a car at (-20.3,-0.0). ",
+          "reference_count": 1,
+          "predicted_count": 2,
+          "predicted_ids": [
+            "2",
+            "1"
+          ]
+        }
+      ]
+    }
+  }
+}
