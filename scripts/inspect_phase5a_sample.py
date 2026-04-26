@@ -265,6 +265,13 @@ def main() -> None:
 
         if task_type == BenchmarkTaskType.PLANNING_AWARENESS:
             decision = planning_orchestrator.select(prepared_scene)
+            handler = evaluator._router._handlers.get(BenchmarkTaskType.PLANNING_AWARENESS)  # noqa: SLF001
+            if isinstance(handler, PlanningAwarenessHandler):
+                planning_result = handler._planning_awareness_objects(prepared_sample)  # noqa: SLF001
+                print("Planning-Awareness Components")
+                print(
+                    f"- merged_object_ids: {[object_track.object_id for object_track in planning_result.objects]}"
+                )
             print("Planning-Awareness Scores")
             if not decision.considered_candidates:
                 print("- none")

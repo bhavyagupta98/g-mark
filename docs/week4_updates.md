@@ -239,6 +239,85 @@ Best current result on the first 100 validation samples:
   - `P = 0.201`
   - `R = 0.633`
 
+### Phase 8 Checkpoint: QA Improvement Loops
+
+Phase 8 has now produced two strong local QA recovery loops on the 100-sample validation slice.
+
+#### What was breaking
+
+- `notable_objects` was under-recalling badly.
+  - the early local proxy result was:
+    - `F1 = 0.795`
+    - `P = 1.000`
+    - `R = 0.660`
+- `planning_awareness` was over-firing badly.
+  - the early local proxy result was:
+    - `F1 = 0.709`
+    - `P = 0.549`
+    - `R = 1.000`
+
+#### What we changed
+
+For `notable_objects`:
+
+- fixed a BEV geometry bug where processed assets were projected with `x,z` instead of `x,y`
+- widened the visible-notable trajectory gate for late-path visible objects
+- filtered outputs to prefer grounded visible objects over candidate-only visible objects
+
+For `planning_awareness`:
+
+- stopped treating it as a broad generic scene-risk selection problem
+- rewired the handler to match the benchmark answer shape directly:
+  - at most one hidden relevant object
+  - at most one visible notable object
+- merged and deduplicated those narrower channels instead of selecting all above-threshold scorer outputs
+
+#### Why these changes likely worked
+
+- `notable_objects` was failing because scene geometry was wrong and candidate leakage was muddying visible-object answers
+- `planning_awareness` was failing because the benchmark question is narrower than the generic orchestrator we were using
+- once the answer logic was aligned more closely to the benchmark structure, false positives dropped sharply without giving up much recall
+
+#### Current local checkpoint
+
+Using the current QA-best manifest on the first `100` validation samples:
+
+- `notable_objects`
+  - local benchmark-style score:
+    - `F1 = 0.990`
+    - `P = 1.000`
+    - `R = 0.980`
+    - exact = `99/100`
+- `planning_awareness`
+  - local benchmark-style score:
+    - `F1 = 0.982`
+    - `P = 1.000`
+    - `R = 0.965`
+    - exact = `98/100`
+- `invisible_objects`
+  - local benchmark-style score:
+    - `F1 = 0.923`
+    - `P = 1.000`
+    - `R = 0.857`
+    - exact = `99/100`
+- `occluding_objects`
+  - local benchmark-style score:
+    - `F1 = 0.566`
+    - `P = 0.667`
+    - `R = 0.492`
+    - exact = `36/100`
+
+#### What this means
+
+- `notable_objects` is no longer a bottleneck
+- `planning_awareness` is no longer a bottleneck
+- `invisible_objects` is in decent shape
+- `occluding_objects` is now the clearest remaining QA weakness
+
+#### Next step
+
+The next Phase 8 improvement target should be `occluding_objects`, especially object-identity and blocker-selection quality rather than simple answer presence.
+
 Comparison to V2V-GoT:
 
 - our scorer reports F1 on a `0-1` scale
@@ -408,3 +487,21 @@ Phase 8 should focus on:
 Phase 8 planning note:
 
 - `docs/phase8_scored_evaluation_and_baseline_archival.md`
+
+### Week 4 Closeout
+
+Week 4 should now be treated as closed.
+
+End-of-week checkpoint:
+
+- Phase 7 is implementation-complete for deferred task coverage.
+- Phase 8 has already started and completed two successful local QA improvement loops:
+  - `notable_objects`
+  - `planning_awareness`
+- current local QA-best checkpoint on the first `100` validation samples:
+  - `notable_objects`: `F1 = 0.990`
+  - `planning_awareness`: `F1 = 0.982`
+  - `invisible_objects`: `F1 = 0.923`
+  - `occluding_objects`: `F1 = 0.566`
+
+Week 5 should begin from the current Phase 8 checkpoint, with `occluding_objects` as the next main QA improvement target.

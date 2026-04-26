@@ -292,6 +292,58 @@ def _scene_with_supported_and_candidate_visible_objects() -> CooperativeScene:
     )
 
 
+def _scene_with_far_only_objects() -> CooperativeScene:
+    return CooperativeScene(
+        scene_id="scene-5",
+        local_timestamp_index=0,
+        global_timestamp_index=0,
+        asker_agent_id="CAV_EGO",
+        agents=(
+            AgentContext(agent_id="CAV_EGO", pose=Pose2D(position=Point2D(0.0, 0.0))),
+            AgentContext(agent_id="CAV_1", pose=Pose2D(position=Point2D(5.0, 0.0))),
+        ),
+        future_trajectory=Trajectory(
+            points=(Point2D(10.0, 0.0), Point2D(20.0, 0.0), Point2D(30.0, 0.0))
+        ),
+        object_tracks=(
+            ObjectTrack(
+                object_id="far-visible",
+                object_type="car",
+                position=Point2D(20.0, 10.0),
+                confidence=0.95,
+                provenance=ProvenanceRecord(
+                    source_agent_ids=("CAV_EGO",),
+                    observation_ids=("obs-10",),
+                    latest_timestamp_index=0,
+                ),
+            ),
+            ObjectTrack(
+                object_id="far-occluded",
+                object_type="car",
+                position=Point2D(22.0, -8.0),
+                confidence=0.95,
+                provenance=ProvenanceRecord(
+                    source_agent_ids=("CAV_1",),
+                    observation_ids=("obs-11",),
+                    latest_timestamp_index=0,
+                ),
+            ),
+        ),
+        visibility_facts=(
+            VisibilityFact(
+                agent_id="CAV_EGO",
+                object_id="far-visible",
+                state=VisibilityState.VISIBLE,
+            ),
+            VisibilityFact(
+                agent_id="CAV_EGO",
+                object_id="far-occluded",
+                state=VisibilityState.OCCLUDED,
+            ),
+        ),
+    )
+
+
 def _sample_with_scene(task_type: BenchmarkTaskType, scene: CooperativeScene) -> BenchmarkSample:
     return BenchmarkSample(
         sample_id=f"sample-{task_type.value}-custom",
@@ -613,6 +665,29 @@ def test_v2vgotqa_router_answers_planning_awareness() -> None:
     assert answer.supported is True
     assert answer.object_ids == ("occluded-car", "visible-car")
     assert "aware" in answer.answer_text.lower()
+
+
+def test_v2vgotqa_router_planning_awareness_limits_visible_results_to_notable_subset() -> None:
+    router = V2VGoTQARouter()
+
+    answer = router.answer(
+        _sample_with_scene(BenchmarkTaskType.PLANNING_AWARENESS, _scene_with_competing_objects())
+    )
+
+    assert answer.supported is True
+    assert answer.object_ids == ("hidden-target", "good-visible")
+
+
+def test_v2vgotqa_router_planning_awareness_returns_empty_when_only_far_objects_exist() -> None:
+    router = V2VGoTQARouter()
+
+    answer = router.answer(
+        _sample_with_scene(BenchmarkTaskType.PLANNING_AWARENESS, _scene_with_far_only_objects())
+    )
+
+    assert answer.supported is True
+    assert answer.object_ids == ()
+    assert answer.answer_text == "There is no notable object."
 
 
 def test_v2vgotqa_router_marks_unsupported_tasks_explicitly() -> None:

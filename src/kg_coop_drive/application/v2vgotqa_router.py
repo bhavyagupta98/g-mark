@@ -10,7 +10,13 @@ from kg_coop_drive.application.planning_awareness import (
 )
 from kg_coop_drive.application.query_engine import SceneQueryEngine
 from kg_coop_drive.domain.benchmark import BenchmarkSample, BenchmarkTaskType
-from kg_coop_drive.domain.scene import QueryResult, RelationType, TrackStatus, VisibilityState
+from kg_coop_drive.domain.scene import (
+    ObjectTrack,
+    QueryResult,
+    RelationType,
+    TrackStatus,
+    VisibilityState,
+)
 
 
 @dataclass(frozen=True)
@@ -1236,21 +1242,24 @@ class PlanningAwarenessHandler(_BaseQueryHandler):
         self._orchestrator = orchestrator or build_planning_awareness_orchestrator()
 
     def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
-        decision = self._orchestrator.select(sample.scene)
-        if decision.selected_candidates:
-            ordered_candidates = tuple(
+        planning_result = self._planning_awareness_objects(sample)
+        if planning_result.objects:
+            ordered_objects = tuple(
                 sorted(
-                    decision.selected_candidates,
-                    key=lambda candidate: (
-                        0 if candidate.visibility_state == VisibilityState.OCCLUDED else 1,
-                        candidate.distance_to_trajectory,
-                        candidate.object_track.object_id,
+                    planning_result.objects,
+                    key=lambda object_track: (
+                        0
+                        if self._visibility_lookup(sample.scene, sample.scene.asker_agent_id).get(
+                            object_track.object_id
+                        )
+                        == VisibilityState.OCCLUDED
+                        else 1,
+                        self._distance_to_trajectory(sample.scene, object_track),
+                        object_track.object_id,
                     ),
                 )
             )
-            object_ids = tuple(
-                candidate.object_track.object_id for candidate in ordered_candidates
-            )
+            object_ids = tuple(object_track.object_id for object_track in ordered_objects)
             rendered_objects = ", ".join(object_ids)
             return BenchmarkAnswer(
                 sample_id=sample.sample_id,
@@ -1267,3 +1276,25 @@ class PlanningAwarenessHandler(_BaseQueryHandler):
             object_ids=(),
             supported=True,
         )
+
+    def _planning_awareness_objects(self, sample: BenchmarkSample) -> QueryResult:
+        hidden_result = self._prefer_grounded_objects(
+            self._top_hidden_relevant(sample, max_results=1)
+        )
+        visible_result = self._prefer_grounded_objects(
+            self._top_notable_visible(sample, max_results=1)
+        )
+        merged_objects = self._merge_unique_objects(hidden_result.objects, visible_result.objects)
+        return QueryResult(scene=sample.scene, objects=merged_objects)
+
+    @staticmethod
+    def _merge_unique_objects(*object_groups: tuple[ObjectTrack, ...]) -> tuple[ObjectTrack, ...]:
+        ordered: list[ObjectTrack] = []
+        seen_object_ids: set[str] = set()
+        for object_group in object_groups:
+            for object_track in object_group:
+                if object_track.object_id in seen_object_ids:
+                    continue
+                ordered.append(object_track)
+                seen_object_ids.add(object_track.object_id)
+        return tuple(ordered)
