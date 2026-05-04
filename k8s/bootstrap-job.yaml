@@ -15,220 +15,73 @@ spec:
       command: ["/bin/bash", "-lc"]
       args:
         - |
-          set -euo pipefail
+          #!/usr/bin/env bash
+          set -euxo pipefail
 
-          export DEBIAN_FRONTEND=noninteractive
-          export WORKSPACE=/workspace
-          export REPOS_DIR="${WORKSPACE}/repos"
-          export ARTIFACT_DIR="${WORKSPACE}/artifacts/v2vgot"
-          export V2VGOT_DIR="${REPOS_DIR}/V2V-GoT"
-
-          echo "[INFO] Installing bootstrap dependencies..."
+          echo "[INFO] Installing system deps..."
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates \
-            curl \
-            git \
-            git-lfs \
-            openssh-client \
-            python3 \
-            python3-pip \
-            python3-pytest \
-            python3-venv \
-            unzip \
-            vim \
-            tmux \
-            less
-          rm -rf /var/lib/apt/lists/*
+            ca-certificates curl git git-lfs openssh-client bzip2 unzip \
+            vim tmux less nano python3 python3-pip
+
           git lfs install
-          echo "[INFO] Python version: $(python3 --version)"
 
-          echo "[INFO] Preparing SSH configuration from mounted secret..."
-          mkdir -p /root/.ssh
-          cp /ssh-secret/id_ed25519 /root/.ssh/id_ed25519
-          cp /ssh-secret/known_hosts /root/.ssh/known_hosts
-          if [ -f /ssh-secret/config ]; then
-            cp /ssh-secret/config /root/.ssh/config
-          fi
-          chmod 700 /root/.ssh
-          chmod 600 /root/.ssh/id_ed25519
-          chmod 644 /root/.ssh/known_hosts
-          if [ -f /root/.ssh/config ]; then
-            chmod 600 /root/.ssh/config
-          fi
+          echo "[INFO] Installing micromamba..."
+          mkdir -p /tmp/micromamba
+          curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest \
+            | tar -xvj -C /tmp/micromamba --strip-components=1 bin/micromamba
 
-          mkdir -p "${REPOS_DIR}" "${ARTIFACT_DIR}"
+          export PATH=/tmp/micromamba:$PATH
+          export MAMBA_ROOT_PREFIX=/tmp/micromamba-root
 
-          clone_or_update_repo() {
-            local repo_url="$1"
-            local target_dir="$2"
-            local branch="$3"
+          echo "[INFO] Creating clean env..."
+          rm -rf /tmp/ct_env
+          micromamba create -y -p /tmp/ct_env -c conda-forge python=3.8 pip
 
-            if [ -d "${target_dir}/.git" ]; then
-              echo "[INFO] Updating existing repo ${target_dir}..."
-              git -C "${target_dir}" fetch --all --prune
-              git -C "${target_dir}" checkout "${branch}"
-              git -C "${target_dir}" pull --ff-only origin "${branch}" || true
-            else
-              echo "[INFO] Cloning ${repo_url} into ${target_dir}..."
-              git clone --branch "${branch}" "${repo_url}" "${target_dir}"
-            fi
-          }
+          echo "[INFO] Installing repo requirements..."
+          cd /workspace/concept_transformer
+          micromamba run -p /tmp/ct_env python -m pip install --upgrade pip
+          micromamba run -p /tmp/ct_env pip install -r requirements.txt
 
-          download_if_missing() {
-            local url="$1"
-            local output_path="$2"
+          echo "[INFO] Fixing setuptools/distutils compatibility..."
+          micromamba run -p /tmp/ct_env pip uninstall -y setuptools || true
+          micromamba run -p /tmp/ct_env pip install "setuptools==59.5.0"
 
-            if [ -f "${output_path}" ]; then
-              echo "[INFO] Found existing artifact ${output_path}; resuming if incomplete..."
-            fi
+          echo "[INFO] Downloading MNIST manually..."
+          for DIR in /workspace/data/MNIST/raw /root/data/MNIST/raw /workspace/concept_transformer/data/MNIST/raw; do
+            mkdir -p "$DIR"
+            cd "$DIR"
 
-            mkdir -p "$(dirname "${output_path}")"
-            set +e
-            curl -L -C - --fail "${url}" -o "${output_path}"
-            local curl_status=$?
-            set -e
-            if [ "${curl_status}" -ne 0 ]; then
-              if [ "${curl_status}" -eq 22 ] && [ -s "${output_path}" ]; then
-                echo "[WARN] Server rejected resume request for ${output_path}. Keeping existing file."
-              else
-                echo "[ERROR] Download failed for ${output_path}"
-                return "${curl_status}"
-              fi
-            fi
-          }
+            curl -L -O https://ossci-datasets.s3.amazonaws.com/mnist/train-images-idx3-ubyte.gz
+            curl -L -O https://ossci-datasets.s3.amazonaws.com/mnist/train-labels-idx1-ubyte.gz
+            curl -L -O https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz
+            curl -L -O https://ossci-datasets.s3.amazonaws.com/mnist/t10k-labels-idx1-ubyte.gz
+          done
 
-          unzip_if_needed() {
-            local archive_path="$1"
-            local marker_path="$2"
-            local destination="$3"
+          cd /workspace/concept_transformer
 
-            if [ -e "${marker_path}" ]; then
-              echo "[INFO] Marker exists for ${archive_path}; skipping extraction."
-              return
-            fi
+          echo "[INFO] Preventing broken torchvision MNIST download..."
+          sed -i 's/download=True/download=False/g' /workspace/concept_transformer/data/mnist_dataset.py
+          sed -i 's/download=False/download=False/g' /workspace/concept_transformer/data/mnist_dataset.py
 
-            echo "[INFO] Extracting ${archive_path} into ${destination}..."
-            unzip -o "${archive_path}" -d "${destination}"
-          }
+          echo "[INFO] Checking CUDA..."
+          micromamba run -p /tmp/ct_env python - <<'PY'
+          import torch
+          print("torch:", torch.__version__)
+          print("cuda available:", torch.cuda.is_available())
+          if torch.cuda.is_available():
+              print("gpu:", torch.cuda.get_device_name(0))
+          PY
 
-          echo "[INFO] Cloning repositories..."
-          clone_or_update_repo "git@github.com:bhavyagupta98/kg_coop_drive.git" "${REPOS_DIR}/kg_coop_drive" "main"
-          clone_or_update_repo "git@github.com:bhavyagupta98/auto_drive_copy.git" "${REPOS_DIR}/auto_drive_copy" "main"
-          clone_or_update_repo "https://github.com/eddyhkchiu/V2V-GoT.git" "${V2VGOT_DIR}" "main"
+          echo "[INFO] Setup done."
+          echo "Run training with:"
+          echo "export PATH=/tmp/micromamba:\$PATH"
+          echo "export MAMBA_ROOT_PREFIX=/tmp/micromamba-root"
+          echo "cd /workspace/concept_transformer"
+          echo "micromamba run -p /tmp/ct_env python ctc_mnist.py"
 
-          if [ "${DOWNLOAD_DATASET_JSONS:-true}" = "true" ]; then
-            download_if_missing \
-              "https://huggingface.co/datasets/eddyhkchiu/V2V-GoT-QA/resolve/main/dataset_jsons.zip" \
-              "${ARTIFACT_DIR}/dataset_jsons.zip"
-            unzip_if_needed \
-              "${ARTIFACT_DIR}/dataset_jsons.zip" \
-              "${V2VGOT_DIR}/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json" \
-              "${V2VGOT_DIR}"
-          fi
-
-          if [ "${DOWNLOAD_PROCESSED_FEATURES:-true}" = "true" ]; then
-            download_if_missing \
-              "https://huggingface.co/datasets/eddyhkchiu/V2V-GoT-QA/resolve/main/dataset_processed_features_and_gt.zip" \
-              "${ARTIFACT_DIR}/dataset_processed_features_and_gt.zip"
-            unzip_if_needed \
-              "${ARTIFACT_DIR}/dataset_processed_features_and_gt.zip" \
-              "${V2VGOT_DIR}/DMSTrack/V2V4Real/official_models/no_fusion_keep_all" \
-              "${V2VGOT_DIR}"
-          fi
-
-          if [ "${DOWNLOAD_MODEL_CKPT:-true}" = "true" ]; then
-            download_if_missing \
-              "https://huggingface.co/datasets/eddyhkchiu/V2V-GoT-QA/resolve/main/model_ckpt.zip" \
-              "${ARTIFACT_DIR}/model_ckpt.zip"
-            unzip_if_needed \
-              "${ARTIFACT_DIR}/model_ckpt.zip" \
-              "${V2VGOT_DIR}/LLaVA/checkpoints" \
-              "${V2VGOT_DIR}"
-          fi
-
-          echo "[INFO] Bootstrap complete."
-          echo "[INFO] Running validation checks..."
-
-          cat >/usr/local/bin/validate_bootstrap.sh <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          WORKSPACE="${WORKSPACE:-/workspace}"
-          REPOS_DIR="${REPOS_DIR:-${WORKSPACE}/repos}"
-          ARTIFACT_DIR="${ARTIFACT_DIR:-${WORKSPACE}/artifacts/v2vgot}"
-          V2VGOT_DIR="${V2VGOT_DIR:-${REPOS_DIR}/V2V-GoT}"
-          print_header() {
-            echo
-            echo "============================================================"
-            echo "$1"
-            echo "============================================================"
-          }
-          check_path() {
-            local label="$1"
-            local path="$2"
-            if [ -e "${path}" ]; then
-              echo "[PASS] ${label}: ${path}"
-            else
-              echo "[FAIL] ${label}: ${path}"
-              return 1
-            fi
-          }
-          check_dir_has_files() {
-            local label="$1"
-            local path="$2"
-            if [ -d "${path}" ] && [ -n "$(find "${path}" -maxdepth 1 -type f | head -n 1)" ]; then
-              echo "[PASS] ${label}: ${path}"
-            else
-              echo "[FAIL] ${label}: ${path}"
-              return 1
-            fi
-          }
-          status=0
-          print_header "Bootstrap Validation"
-          check_path "Workspace directory" "${WORKSPACE}" || status=1
-          check_path "Repos directory" "${REPOS_DIR}" || status=1
-          check_path "Artifacts directory" "${ARTIFACT_DIR}" || status=1
-          print_header "Repository Checks"
-          check_path "kg_coop_drive repo" "${REPOS_DIR}/kg_coop_drive/.git" || status=1
-          check_path "auto_drive_copy repo" "${REPOS_DIR}/auto_drive_copy/.git" || status=1
-          check_path "V2V-GoT repo" "${V2VGOT_DIR}/.git" || status=1
-          print_header "Artifact Checks"
-          check_path "dataset_jsons.zip" "${ARTIFACT_DIR}/dataset_jsons.zip" || status=1
-          if [ "${DOWNLOAD_PROCESSED_FEATURES:-true}" = "true" ]; then
-            check_path "dataset_processed_features_and_gt.zip" "${ARTIFACT_DIR}/dataset_processed_features_and_gt.zip" || status=1
-          fi
-          if [ "${DOWNLOAD_MODEL_CKPT:-true}" = "true" ]; then
-            check_path "model_ckpt.zip" "${ARTIFACT_DIR}/model_ckpt.zip" || status=1
-          fi
-          print_header "Extracted Dataset Checks"
-          check_dir_has_files \
-            "Val co_llm JSONs" \
-            "${V2VGOT_DIR}/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm" || status=1
-          check_dir_has_files \
-            "Train co_llm JSONs" \
-            "${V2VGOT_DIR}/DMSTrack/V2V4Real/official_models/train_no_fusion_keep_all/npy/co_llm" || status=1
-          check_path \
-            "Val V2V-GoT QA dataset" \
-            "${V2VGOT_DIR}/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json" || status=1
-          check_path \
-            "Train V2V-GoT QA dataset" \
-            "${V2VGOT_DIR}/DMSTrack/V2V4Real/official_models/train_no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json" || status=1
-          print_header "Summary"
-          if [ "${status}" -eq 0 ]; then
-            echo "[PASS] Bootstrap validation completed successfully."
-          else
-            echo "[FAIL] Bootstrap validation found missing files."
-          fi
-          exit "${status}"
-          EOF
-          chmod +x /usr/local/bin/validate_bootstrap.sh
-          /usr/local/bin/validate_bootstrap.sh
-
-          echo "[INFO] Pod will remain running for interactive use."
-          echo "[INFO] Workspace contents:"
-          find "${WORKSPACE}" -maxdepth 3 -type d | sort | sed -n '1,200p'
-
-          tail -f /dev/null
+          nvidia-smi || true
+          sleep infinity
       env:
         - name: DOWNLOAD_DATASET_JSONS
           value: "true"

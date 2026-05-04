@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from math import atan2, dist
+from dataclasses import dataclass, replace
+from math import atan2, dist, tanh
 from typing import Protocol
 
 from kg_coop_drive.application.planning_awareness import (
@@ -97,6 +97,63 @@ class OccludingObjectLLMRankedItem:
 
     object_id: str
     score: float
+
+
+@dataclass(frozen=True)
+class OccludingSelectionPolicy:
+    """Configurable context policy for selecting occluding-object candidates."""
+
+    max_results: int = 3
+    min_results_with_visible_fallback: int = 2
+    enable_visible_fallback: bool = True
+    third_candidate_min_risk: float = 0.45
+    third_candidate_min_relative_to_second: float = 0.65
+    geometric_weight: float = 0.3
+    alignment_weight: float = 0.22
+    hidden_relevance_weight: float = 0.18
+    provenance_weight: float = 0.12
+    model_score_weight: float = 0.18
+    candidate_penalty: float = 0.03
+    top_two_risk_coverage_target: float = 0.86
+    caution_multiplier: float = 1.0
+
+
+@dataclass(frozen=True)
+class InvisibleSelectionPolicy:
+    """Configurable policy for precision-aware invisible-object selection."""
+
+    max_results: int = 1
+    shortlist_size: int = 6
+    min_distance_to_asker: float = 2.0
+    max_distance_to_trajectory: float = 5.0
+    max_distance_to_asker: float = 80.0
+    min_risk: float = 0.58
+    min_relative_to_best: float = 0.75
+    trajectory_weight: float = 0.34
+    asker_weight: float = 0.12
+    provenance_weight: float = 0.2
+    confidence_weight: float = 0.2
+    model_score_weight: float = 0.14
+    candidate_penalty: float = 0.18
+    conflict_penalty: float = 0.14
+    uncertainty_penalty: float = 0.12
+    lateral_relevance_min_abs_y: float = 1.0
+    lateral_relevance_max_abs_y: float = 8.0
+    lateral_relevance_bonus: float = 0.38
+    far_centerline_abs_y: float = 1.0
+    far_centerline_min_distance_to_asker: float = 15.0
+    far_centerline_penalty: float = 0.7
+    road_region_min_score: float = 0.0
+    far_behind_centerline_abs_y: float = 1.0
+    far_behind_min_distance_to_asker: float = 15.0
+    far_behind_max_relative_x: float = -1.0
+    backtrack_centerline_abs_y: float = 1.0
+    backtrack_max_distance_to_trajectory: float = 2.0
+    backtrack_max_relative_x: float = -1.0
+    rescue_min_relative_x: float = 1.0
+    rescue_min_abs_y: float = 1.0
+    rescue_min_distance_to_trajectory: float = 2.0
+    rescue_min_support_count: int = 2
 
 
 class OccludingObjectsBatchLLMClient(Protocol):
@@ -462,6 +519,83 @@ class _BaseQueryHandler:
     def _top_notable_visible(self, sample: BenchmarkSample, max_results: int = 2) -> QueryResult:
         return self._rank_by_role(sample, role="visible_relevant", max_results=max_results)
 
+    def _top_hidden_relevant_risk_adaptive(
+        self,
+        sample: BenchmarkSample,
+        policy: InvisibleSelectionPolicy,
+    ) -> QueryResult:
+        shortlist_size = max(policy.shortlist_size, policy.max_results)
+        ranked_scores = self._ranked_role_scores(
+            sample,
+            role="hidden_relevant",
+            max_results=shortlist_size,
+            min_distance_to_asker=policy.min_distance_to_asker,
+            max_distance_to_trajectory=5.0,
+        )
+        if not ranked_scores:
+            return QueryResult(scene=sample.scene, objects=())
+
+        risks = self._invisible_relative_risks(ranked_scores, policy)
+        best_risk = max(risks, default=0.0)
+        selected: list[_RoleScoredObject] = []
+        for index, candidate in enumerate(ranked_scores):
+            risk = risks[index]
+            relative_to_best = risk / best_risk if best_risk > 0.0 else 0.0
+            if candidate.distance_to_asker < policy.min_distance_to_asker:
+                continue
+            if candidate.distance_to_trajectory > policy.max_distance_to_trajectory:
+                continue
+            if candidate.distance_to_asker > policy.max_distance_to_asker:
+                continue
+            if risk < policy.min_risk:
+                continue
+            if relative_to_best < policy.min_relative_to_best:
+                continue
+            selected.append(candidate)
+            if len(selected) >= policy.max_results:
+                break
+
+        return QueryResult(
+            scene=sample.scene,
+            objects=tuple(item.object_track for item in selected),
+        )
+
+    @classmethod
+    def _invisible_relative_risks(
+        cls,
+        ranked_scores: tuple[_RoleScoredObject, ...],
+        policy: InvisibleSelectionPolicy,
+    ) -> tuple[float, ...]:
+        model_scores = tuple(item.score for item in ranked_scores)
+        model_components = cls._normalize_high_values(model_scores)
+        risks: list[float] = []
+
+        for index, item in enumerate(ranked_scores):
+            trajectory_component = max(
+                0.0,
+                1.0 - item.distance_to_trajectory / max(policy.max_distance_to_trajectory, 1e-6),
+            )
+            asker_component = max(
+                0.0,
+                1.0 - item.distance_to_asker / max(policy.max_distance_to_asker, 1e-6),
+            )
+            provenance_component = min(1.0, item.support_count / 2.0)
+            confidence_component = max(0.0, min(1.0, float(item.object_track.confidence)))
+            risk = (
+                policy.trajectory_weight * trajectory_component
+                + policy.asker_weight * asker_component
+                + policy.provenance_weight * provenance_component
+                + policy.confidence_weight * confidence_component
+                + policy.model_score_weight * model_components[index]
+                - policy.conflict_penalty * item.object_track.conflict_score
+                - policy.uncertainty_penalty * item.object_track.uncertainty_score
+            )
+            if item.object_track.status == TrackStatus.CANDIDATE:
+                risk -= policy.candidate_penalty
+            risks.append(max(0.0, min(1.0, risk)))
+
+        return tuple(risks)
+
     def _top_notable_visible_energy(self, sample: BenchmarkSample, max_results: int = 2) -> QueryResult:
         scene = sample.scene
         visibility_by_object = self._visibility_lookup(scene, scene.asker_agent_id)
@@ -553,10 +687,76 @@ class _BaseQueryHandler:
         sample: BenchmarkSample,
         role: str,
         max_results: int,
+        min_distance_to_asker: float = 0.0,
+        max_distance_to_trajectory: float = 5.0,
     ) -> tuple[_RoleScoredObject, ...]:
         if role == "blocker":
             return self._blocker_role_scores(sample, max_results=max_results)
+        if role == "hidden_relevant":
+            return self._hidden_relevant_role_scores(
+                sample,
+                max_results=max_results,
+                min_distance_to_asker=min_distance_to_asker,
+                max_distance_to_trajectory=max_distance_to_trajectory,
+            )
         return ()
+
+    def _hidden_relevant_role_scores(
+        self,
+        sample: BenchmarkSample,
+        max_results: int,
+        min_distance_to_asker: float = 0.0,
+        max_distance_to_trajectory: float = 5.0,
+    ) -> tuple[_RoleScoredObject, ...]:
+        scene = sample.scene
+        visibility_by_object = self._visibility_lookup(scene, scene.asker_agent_id)
+        occluded_objects = tuple(
+            object_track
+            for object_track in scene.object_tracks
+            if visibility_by_object.get(object_track.object_id) == VisibilityState.OCCLUDED
+        )
+
+        role_scores: list[_RoleScoredObject] = []
+        for object_track in occluded_objects:
+            distance_to_trajectory = self._distance_to_trajectory(scene, object_track)
+            if distance_to_trajectory > max_distance_to_trajectory:
+                continue
+            distance_to_asker = self._distance_to_asker(scene, object_track)
+            if distance_to_asker < min_distance_to_asker:
+                continue
+            score = (
+                2.5 / (1.0 + distance_to_trajectory)
+                + 0.7 / (1.0 + distance_to_asker)
+                + 0.35 * self._support_count(object_track)
+                + 0.25 * object_track.confidence
+                - 0.25 * self._status_rank(object_track)
+                - 0.45 * object_track.conflict_score
+                - 0.3 * object_track.uncertainty_score
+            )
+            role_scores.append(
+                _RoleScoredObject(
+                    object_track=object_track,
+                    role="hidden_relevant",
+                    score=score,
+                    distance_to_trajectory=distance_to_trajectory,
+                    distance_to_asker=distance_to_asker,
+                    support_count=self._support_count(object_track),
+                    visibility_state=visibility_by_object.get(object_track.object_id),
+                )
+            )
+
+        return tuple(
+            sorted(
+                role_scores,
+                key=lambda item: (
+                    -item.score,
+                    item.distance_to_trajectory,
+                    item.distance_to_asker,
+                    -item.support_count,
+                    item.object_track.object_id,
+                ),
+            )[:max_results]
+        )
 
     def _notable_role_scores(
         self,
@@ -640,16 +840,355 @@ class _BaseQueryHandler:
             )[:max_results]
         )
 
-    def _top_occluding_objects(self, sample: BenchmarkSample, max_results: int = 2) -> QueryResult:
+    def _top_occluding_objects(self, sample: BenchmarkSample, max_results: int = 3) -> QueryResult:
         ranked_scores = self._ranked_role_scores(sample, role="blocker", max_results=max_results)
         if ranked_scores:
+            ranked_scores = self._select_occluding_score_set(ranked_scores, max_results=max_results)
             return QueryResult(
                 scene=sample.scene,
                 objects=tuple(item.object_track for item in ranked_scores),
             )
 
+        fallback = self._rank_by_role(sample, role="visible_relevant", max_results=min(2, max_results))
+        return QueryResult(scene=sample.scene, objects=fallback.objects)
+
+    def _top_occluding_objects_open_top3(self, sample: BenchmarkSample, max_results: int = 3) -> QueryResult:
+        ranked_scores = self._ranked_role_scores(sample, role="blocker", max_results=max_results)
+        if ranked_scores:
+            return QueryResult(
+                scene=sample.scene,
+                objects=tuple(item.object_track for item in ranked_scores[:max_results]),
+            )
+
         fallback = self._rank_by_role(sample, role="visible_relevant", max_results=max_results)
         return QueryResult(scene=sample.scene, objects=fallback.objects)
+
+    def _top_occluding_objects_far_supported_top3(
+        self,
+        sample: BenchmarkSample,
+        max_results: int = 3,
+    ) -> QueryResult:
+        ranked_scores = self._ranked_role_scores(sample, role="blocker", max_results=max_results)
+        if ranked_scores:
+            ranked_scores = self._select_occluding_far_supported_score_set(
+                ranked_scores,
+                max_results=max_results,
+            )
+            return QueryResult(
+                scene=sample.scene,
+                objects=tuple(item.object_track for item in ranked_scores),
+            )
+
+        fallback = self._rank_by_role(sample, role="visible_relevant", max_results=min(2, max_results))
+        return QueryResult(scene=sample.scene, objects=fallback.objects)
+
+    def _top_occluding_objects_hybrid_top3(
+        self,
+        sample: BenchmarkSample,
+        max_results: int = 3,
+    ) -> QueryResult:
+        ranked_scores = self._ranked_role_scores(sample, role="blocker", max_results=max_results)
+        if ranked_scores:
+            ranked_scores = self._select_occluding_hybrid_score_set(
+                ranked_scores,
+                max_results=max_results,
+            )
+            return QueryResult(
+                scene=sample.scene,
+                objects=tuple(item.object_track for item in ranked_scores),
+            )
+
+        fallback = self._rank_by_role(sample, role="visible_relevant", max_results=min(2, max_results))
+        return QueryResult(scene=sample.scene, objects=fallback.objects)
+
+    def _top_occluding_objects_risk_adaptive(
+        self,
+        sample: BenchmarkSample,
+        policy: OccludingSelectionPolicy,
+    ) -> QueryResult:
+        shortlist_size = max(policy.max_results, 4)
+        ranked_scores = self._ranked_role_scores(sample, role="blocker", max_results=shortlist_size)
+        if ranked_scores:
+            ranked_scores = self._select_occluding_risk_adaptive_score_set(
+                ranked_scores,
+                policy=policy,
+            )
+            ranked_scores = self._backfill_occluding_scores_with_visible_risk(
+                sample=sample,
+                selected_scores=ranked_scores,
+                policy=policy,
+            )
+            return QueryResult(
+                scene=sample.scene,
+                objects=tuple(item.object_track for item in ranked_scores),
+            )
+
+        fallback_scores = self._visible_occluding_fallback_scores(
+            sample=sample,
+            excluded_object_ids=(),
+            max_results=min(policy.min_results_with_visible_fallback, policy.max_results),
+        )
+        return QueryResult(
+            scene=sample.scene,
+            objects=tuple(item.object_track for item in fallback_scores),
+        )
+
+    def _backfill_occluding_scores_with_visible_risk(
+        self,
+        sample: BenchmarkSample,
+        selected_scores: tuple[_RoleScoredObject, ...],
+        policy: OccludingSelectionPolicy,
+    ) -> tuple[_RoleScoredObject, ...]:
+        if not policy.enable_visible_fallback:
+            return selected_scores[: policy.max_results]
+        if len(selected_scores) >= policy.min_results_with_visible_fallback:
+            return selected_scores[: policy.max_results]
+
+        excluded_object_ids = tuple(item.object_track.object_id for item in selected_scores)
+        fallback_scores = self._visible_occluding_fallback_scores(
+            sample=sample,
+            excluded_object_ids=excluded_object_ids,
+            max_results=policy.min_results_with_visible_fallback - len(selected_scores),
+        )
+        return tuple((*selected_scores, *fallback_scores))[: policy.max_results]
+
+    def _visible_occluding_fallback_scores(
+        self,
+        sample: BenchmarkSample,
+        excluded_object_ids: tuple[str, ...],
+        max_results: int,
+    ) -> tuple[_RoleScoredObject, ...]:
+        if max_results <= 0:
+            return ()
+
+        scene = sample.scene
+        excluded_ids = set(excluded_object_ids)
+        visibility_by_object = self._visibility_lookup(scene, scene.asker_agent_id)
+        visible_objects = tuple(
+            object_track
+            for object_track in scene.object_tracks
+            if visibility_by_object.get(object_track.object_id) == VisibilityState.VISIBLE
+            and object_track.object_id not in excluded_ids
+        )
+        if not visible_objects:
+            return ()
+
+        trajectory_distances = tuple(
+            self._distance_to_trajectory(scene, object_track)
+            for object_track in visible_objects
+        )
+        asker_distances = tuple(
+            self._distance_to_asker(scene, object_track)
+            for object_track in visible_objects
+        )
+        supports = tuple(float(self._support_count(object_track)) for object_track in visible_objects)
+        confidences = tuple(float(object_track.confidence) for object_track in visible_objects)
+        trajectory_components = self._normalize_low_values(trajectory_distances)
+        asker_components = self._normalize_low_values(asker_distances)
+        support_components = self._normalize_high_values(supports)
+        confidence_components = self._normalize_high_values(confidences)
+
+        fallback_scores: list[_RoleScoredObject] = []
+        for index, object_track in enumerate(visible_objects):
+            score = (
+                0.45 * trajectory_components[index]
+                + 0.2 * asker_components[index]
+                + 0.2 * support_components[index]
+                + 0.15 * confidence_components[index]
+                - 0.08 * self._status_rank(object_track)
+                - 0.2 * object_track.conflict_score
+                - 0.15 * object_track.uncertainty_score
+            )
+            fallback_scores.append(
+                _RoleScoredObject(
+                    object_track=object_track,
+                    role="visible_occluding_fallback",
+                    score=score,
+                    distance_to_trajectory=trajectory_distances[index],
+                    distance_to_asker=asker_distances[index],
+                    support_count=self._support_count(object_track),
+                    visibility_state=visibility_by_object.get(object_track.object_id),
+                )
+            )
+
+        return tuple(
+            sorted(
+                fallback_scores,
+                key=lambda item: (
+                    -item.score,
+                    item.distance_to_trajectory,
+                    item.distance_to_asker,
+                    -item.support_count,
+                    item.object_track.object_id,
+                ),
+            )[:max_results]
+        )
+
+    @staticmethod
+    def _select_occluding_score_set(
+        ranked_scores: tuple[_RoleScoredObject, ...],
+        max_results: int,
+    ) -> tuple[_RoleScoredObject, ...]:
+        """Keep top blockers while admitting a strong third candidate for Phase 8 recall."""
+
+        if len(ranked_scores) <= 2 or max_results <= 2:
+            return ranked_scores[:max_results]
+
+        selected = list(ranked_scores[:2])
+        third = ranked_scores[2]
+        second = ranked_scores[1]
+        best_hidden_distance = (
+            min(third.aligned_hidden_distances_to_trajectory)
+            if third.aligned_hidden_distances_to_trajectory
+            else float("inf")
+        )
+        third_is_path_relevant = third.distance_to_trajectory <= 7.0 or best_hidden_distance <= 5.0
+        third_is_well_aligned = third.best_alignment_radians <= 0.35
+        third_is_score_competitive = third.score >= second.score - 0.75
+        if third_is_path_relevant and third_is_well_aligned and third_is_score_competitive:
+            selected.append(third)
+
+        return tuple(selected[:max_results])
+
+    @staticmethod
+    def _select_occluding_far_supported_score_set(
+        ranked_scores: tuple[_RoleScoredObject, ...],
+        max_results: int,
+    ) -> tuple[_RoleScoredObject, ...]:
+        """Admit far, grounded third blockers while filtering mid-distance extras."""
+
+        if len(ranked_scores) <= 2 or max_results <= 2:
+            return ranked_scores[:max_results]
+
+        selected = list(ranked_scores[:2])
+        third = ranked_scores[2]
+        third_is_grounded = third.object_track.status != TrackStatus.CANDIDATE
+        third_is_far_context = third.distance_to_asker >= 70.0
+        if third_is_grounded and third_is_far_context:
+            selected.append(third)
+
+        return tuple(selected[:max_results])
+
+    @staticmethod
+    def _select_occluding_hybrid_score_set(
+        ranked_scores: tuple[_RoleScoredObject, ...],
+        max_results: int,
+    ) -> tuple[_RoleScoredObject, ...]:
+        """Admit third blockers that match far-track or near-mid blocker evidence."""
+
+        if len(ranked_scores) <= 2 or max_results <= 2:
+            return ranked_scores[:max_results]
+
+        selected = list(ranked_scores[:2])
+        third = ranked_scores[2]
+        third_is_grounded = third.object_track.status != TrackStatus.CANDIDATE
+        third_is_far_supported_context = third_is_grounded and third.distance_to_asker >= 70.0
+        third_is_near_mid_context = (
+            third.distance_to_asker <= 45.0
+            and third.distance_to_trajectory <= 16.0
+            and third.best_alignment_radians <= 0.38
+        )
+        if third_is_far_supported_context or third_is_near_mid_context:
+            selected.append(third)
+
+        return tuple(selected[:max_results])
+
+    @classmethod
+    def _select_occluding_risk_adaptive_score_set(
+        cls,
+        ranked_scores: tuple[_RoleScoredObject, ...],
+        policy: OccludingSelectionPolicy,
+    ) -> tuple[_RoleScoredObject, ...]:
+        """Select blockers by relative occlusion risk instead of fixed scene distances."""
+
+        if len(ranked_scores) <= 2 or policy.max_results <= 2:
+            return ranked_scores[: policy.max_results]
+
+        risks = cls._occluding_relative_risks(ranked_scores, policy)
+        selected = list(ranked_scores[:2])
+        second_risk = risks[1]
+        total_risk = sum(risks)
+        selected_risk = sum(risks[:2])
+        for index, candidate in enumerate(ranked_scores[2:], start=2):
+            candidate_risk = risks[index]
+            relative_to_second = (
+                candidate_risk / second_risk
+                if second_risk > 0.0
+                else 0.0
+            )
+            selected_coverage = (
+                selected_risk / total_risk
+                if total_risk > 0.0
+                else 1.0
+            )
+            if (
+                (
+                    candidate_risk >= policy.third_candidate_min_risk * policy.caution_multiplier
+                    and relative_to_second >= policy.third_candidate_min_relative_to_second
+                )
+                or (
+                    selected_coverage < policy.top_two_risk_coverage_target
+                    and candidate_risk > 0.0
+                )
+            ):
+                selected.append(candidate)
+                selected_risk += candidate_risk
+            if len(selected) >= policy.max_results:
+                break
+
+        return tuple(selected[: policy.max_results])
+
+    @classmethod
+    def _occluding_relative_risks(
+        cls,
+        ranked_scores: tuple[_RoleScoredObject, ...],
+        policy: OccludingSelectionPolicy,
+    ) -> tuple[float, ...]:
+        model_scores = tuple(item.score for item in ranked_scores)
+        trajectory_distances = tuple(item.distance_to_trajectory for item in ranked_scores)
+        alignments = tuple(item.best_alignment_radians for item in ranked_scores)
+        supports = tuple(float(item.support_count) for item in ranked_scores)
+        hidden_distances = tuple(
+            min(item.aligned_hidden_distances_to_trajectory)
+            if item.aligned_hidden_distances_to_trajectory
+            else max(trajectory_distances, default=1.0)
+            for item in ranked_scores
+        )
+
+        model_components = cls._normalize_high_values(model_scores)
+        trajectory_components = cls._normalize_low_values(trajectory_distances)
+        alignment_components = cls._normalize_low_values(alignments)
+        support_components = cls._normalize_high_values(supports)
+        hidden_components = cls._normalize_low_values(hidden_distances)
+
+        risks: list[float] = []
+        for index, item in enumerate(ranked_scores):
+            risk = (
+                policy.geometric_weight * trajectory_components[index]
+                + policy.alignment_weight * alignment_components[index]
+                + policy.hidden_relevance_weight * hidden_components[index]
+                + policy.provenance_weight * support_components[index]
+                + policy.model_score_weight * model_components[index]
+            )
+            if item.object_track.status == TrackStatus.CANDIDATE:
+                risk -= policy.candidate_penalty
+            risks.append(max(0.0, min(1.0, risk)))
+        return tuple(risks)
+
+    @staticmethod
+    def _normalize_high_values(values: tuple[float, ...]) -> tuple[float, ...]:
+        if not values:
+            return ()
+        minimum = min(values)
+        maximum = max(values)
+        if maximum == minimum:
+            return tuple(1.0 for _value in values)
+        return tuple((value - minimum) / (maximum - minimum) for value in values)
+
+    @staticmethod
+    def _normalize_low_values(values: tuple[float, ...]) -> tuple[float, ...]:
+        high_values = _BaseQueryHandler._normalize_high_values(values)
+        return tuple(1.0 - value for value in high_values)
 
     def _top_occluding_objects_with_llm(
         self,
@@ -753,8 +1292,376 @@ class _BaseQueryHandler:
             objects=tuple(item.object_track for item in blended),
         )
 
-    def _top_hidden_relevant(self, sample: BenchmarkSample, max_results: int = 2) -> QueryResult:
-        return self._rank_by_role(sample, role="hidden_relevant", max_results=max_results)
+    def _top_hidden_relevant(
+        self,
+        sample: BenchmarkSample,
+        max_results: int = 2,
+        selection_policy: InvisibleSelectionPolicy | None = None,
+    ) -> QueryResult:
+        policy = selection_policy or InvisibleSelectionPolicy(
+            min_distance_to_asker=0.0,
+            max_distance_to_trajectory=5.0,
+        )
+        ranked_scores = self._ranked_role_scores(
+            sample,
+            role="hidden_relevant",
+            max_results=max_results,
+            min_distance_to_asker=policy.min_distance_to_asker,
+            max_distance_to_trajectory=policy.max_distance_to_trajectory,
+        )
+        return QueryResult(
+            scene=sample.scene,
+            objects=tuple(item.object_track for item in ranked_scores),
+        )
+
+    def _top_hidden_relevant_road_region(
+        self,
+        sample: BenchmarkSample,
+        selection_policy: InvisibleSelectionPolicy,
+    ) -> QueryResult:
+        policy = selection_policy
+        ranked_scores = self._ranked_role_scores(
+            sample,
+            role="hidden_relevant",
+            max_results=max(policy.shortlist_size, policy.max_results),
+            min_distance_to_asker=policy.min_distance_to_asker,
+            max_distance_to_trajectory=policy.max_distance_to_trajectory,
+        )
+        rescored: list[tuple[float, _RoleScoredObject]] = []
+        for item in ranked_scores:
+            position = item.object_track.position
+            abs_y = abs(position.y)
+            road_region_score = item.score
+            if policy.lateral_relevance_min_abs_y <= abs_y <= policy.lateral_relevance_max_abs_y:
+                road_region_score += policy.lateral_relevance_bonus
+            if (
+                abs_y < policy.far_centerline_abs_y
+                and item.distance_to_asker >= policy.far_centerline_min_distance_to_asker
+            ):
+                road_region_score -= policy.far_centerline_penalty
+            if road_region_score < policy.road_region_min_score:
+                continue
+            rescored.append((road_region_score, item))
+
+        selected = tuple(
+            item
+            for _, item in sorted(
+                rescored,
+                key=lambda value: (
+                    -value[0],
+                    value[1].distance_to_trajectory,
+                    value[1].distance_to_asker,
+                    -value[1].support_count,
+                    value[1].object_track.object_id,
+                ),
+            )[: policy.max_results]
+        )
+        return QueryResult(
+            scene=sample.scene,
+            objects=tuple(item.object_track for item in selected),
+        )
+
+    def _top_hidden_relevant_temporal_guard(
+        self,
+        sample: BenchmarkSample,
+        selection_policy: InvisibleSelectionPolicy,
+    ) -> QueryResult:
+        policy = selection_policy
+        ranked_scores = self._ranked_role_scores(
+            sample,
+            role="hidden_relevant",
+            max_results=max(policy.shortlist_size, policy.max_results),
+            min_distance_to_asker=policy.min_distance_to_asker,
+            max_distance_to_trajectory=policy.max_distance_to_trajectory,
+        )
+        asker = next(
+            (agent for agent in sample.scene.agents if agent.agent_id == sample.scene.asker_agent_id),
+            None,
+        )
+        selected: list[_RoleScoredObject] = []
+        for item in ranked_scores:
+            if asker is not None:
+                relative_x = item.object_track.position.x - asker.pose.position.x
+                relative_y = item.object_track.position.y - asker.pose.position.y
+                is_far_behind_centerline = (
+                    relative_x <= policy.far_behind_max_relative_x
+                    and abs(relative_y) < policy.far_behind_centerline_abs_y
+                    and item.distance_to_asker >= policy.far_behind_min_distance_to_asker
+                )
+                if is_far_behind_centerline:
+                    continue
+            selected.append(item)
+            if len(selected) >= policy.max_results:
+                break
+        return QueryResult(
+            scene=sample.scene,
+            objects=tuple(item.object_track for item in selected),
+        )
+
+    def _top_hidden_relevant_backtrack_guard(
+        self,
+        sample: BenchmarkSample,
+        selection_policy: InvisibleSelectionPolicy,
+    ) -> QueryResult:
+        policy = selection_policy
+        ranked_scores = self._ranked_role_scores(
+            sample,
+            role="hidden_relevant",
+            max_results=max(policy.shortlist_size, policy.max_results),
+            min_distance_to_asker=policy.min_distance_to_asker,
+            max_distance_to_trajectory=policy.max_distance_to_trajectory,
+        )
+        asker = next(
+            (agent for agent in sample.scene.agents if agent.agent_id == sample.scene.asker_agent_id),
+            None,
+        )
+        selected: list[_RoleScoredObject] = []
+        for item in ranked_scores:
+            if asker is not None:
+                relative_x = item.object_track.position.x - asker.pose.position.x
+                relative_y = item.object_track.position.y - asker.pose.position.y
+                is_backtrack_centerline_clutter = (
+                    relative_x <= policy.backtrack_max_relative_x
+                    and abs(relative_y) < policy.backtrack_centerline_abs_y
+                    and item.distance_to_trajectory < policy.backtrack_max_distance_to_trajectory
+                )
+                if is_backtrack_centerline_clutter:
+                    continue
+            selected.append(item)
+            if len(selected) >= policy.max_results:
+                break
+        return QueryResult(
+            scene=sample.scene,
+            objects=tuple(item.object_track for item in selected),
+        )
+
+    @staticmethod
+    def _sigmoid(value: float) -> float:
+        if value >= 0:
+            z = 2.718281828459045 ** (-value)
+            return 1.0 / (1.0 + z)
+        z = 2.718281828459045 ** value
+        return z / (1.0 + z)
+
+    def _logreg_feature_values(
+        self,
+        sample: BenchmarkSample,
+        item: _RoleScoredObject,
+        rank: int,
+        feature_names: list[str],
+    ) -> list[float]:
+        track = item.object_track
+        asker = next(
+            (agent for agent in sample.scene.agents if agent.agent_id == sample.scene.asker_agent_id),
+            None,
+        )
+        relative_x = track.position.x - asker.pose.position.x if asker is not None else track.position.x
+        relative_y = track.position.y - asker.pose.position.y if asker is not None else track.position.y
+        raw_values = {
+            "rank": float(rank),
+            "role_score": float(item.score),
+            "relative_x": float(relative_x),
+            "relative_y": float(relative_y),
+            "abs_relative_x": abs(float(relative_x)),
+            "abs_relative_y": abs(float(relative_y)),
+            "distance_to_asker": float(item.distance_to_asker),
+            "distance_to_trajectory": float(item.distance_to_trajectory),
+            "support_count": float(item.support_count),
+            "confidence": float(track.confidence),
+            "conflict_score": float(track.conflict_score),
+            "uncertainty_score": float(track.uncertainty_score),
+            "age_frames": float(track.age_frames),
+            "miss_count": float(track.miss_count),
+            "status=confirmed": 1.0 if track.status.value == "confirmed" else 0.0,
+            "status=supported": 1.0 if track.status.value == "supported" else 0.0,
+            "status=candidate": 1.0 if track.status.value == "candidate" else 0.0,
+        }
+        return [raw_values.get(name, 0.0) for name in feature_names]
+
+    def _top_hidden_relevant_logreg_acceptor(
+        self,
+        sample: BenchmarkSample,
+        selection_policy: InvisibleSelectionPolicy,
+        acceptor_model: dict[str, object],
+    ) -> QueryResult:
+        policy = selection_policy
+        ranked_scores = self._ranked_role_scores(
+            sample,
+            role="hidden_relevant",
+            max_results=max(policy.shortlist_size, policy.max_results),
+            min_distance_to_asker=policy.min_distance_to_asker,
+            max_distance_to_trajectory=policy.max_distance_to_trajectory,
+        )
+        selected = self._accepted_logreg_hidden_items(sample, ranked_scores, policy, acceptor_model)
+        return QueryResult(scene=sample.scene, objects=tuple(item.object_track for item in selected))
+
+    def _top_hidden_relevant_mlp_acceptor(
+        self,
+        sample: BenchmarkSample,
+        selection_policy: InvisibleSelectionPolicy,
+        acceptor_model: dict[str, object],
+    ) -> QueryResult:
+        policy = selection_policy
+        ranked_scores = self._ranked_role_scores(
+            sample,
+            role="hidden_relevant",
+            max_results=max(policy.shortlist_size, policy.max_results),
+            min_distance_to_asker=policy.min_distance_to_asker,
+            max_distance_to_trajectory=policy.max_distance_to_trajectory,
+        )
+        selected = self._accepted_mlp_hidden_items(sample, ranked_scores, policy, acceptor_model)
+        return QueryResult(scene=sample.scene, objects=tuple(item.object_track for item in selected))
+
+    def _accepted_logreg_hidden_items(
+        self,
+        sample: BenchmarkSample,
+        ranked_scores: tuple[_RoleScoredObject, ...],
+        policy: InvisibleSelectionPolicy,
+        acceptor_model: dict[str, object],
+    ) -> tuple[_RoleScoredObject, ...]:
+        feature_names = [str(item) for item in acceptor_model.get("feature_names", [])]
+        normalization = acceptor_model.get("normalization", {})
+        if not isinstance(normalization, dict):
+            normalization = {}
+        means = [float(item) for item in normalization.get("mean", [])]
+        stds = [float(item) if float(item) != 0.0 else 1.0 for item in normalization.get("std", [])]
+        weights = [float(item) for item in acceptor_model.get("weights", [])]
+        bias = float(acceptor_model.get("bias", 0.0))
+        threshold = float(acceptor_model.get("threshold", 0.5))
+        if not feature_names or len(feature_names) != len(means) or len(feature_names) != len(stds) or len(feature_names) != len(weights):
+            return ()
+        scored: list[tuple[float, _RoleScoredObject]] = []
+        for rank, item in enumerate(ranked_scores, start=1):
+            raw_features = self._logreg_feature_values(sample, item, rank, feature_names)
+            normalized = [
+                (value - means[index]) / stds[index]
+                for index, value in enumerate(raw_features)
+            ]
+            logit = bias + sum(weight * value for weight, value in zip(weights, normalized))
+            probability = self._sigmoid(logit)
+            if probability >= threshold:
+                scored.append((probability, item))
+
+        return tuple(
+            item
+            for _, item in sorted(
+                scored,
+                key=lambda value: (
+                    -value[0],
+                    value[1].distance_to_trajectory,
+                    value[1].distance_to_asker,
+                    -value[1].support_count,
+                    value[1].object_track.object_id,
+                ),
+            )[: policy.max_results]
+        )
+
+    def _accepted_mlp_hidden_items(
+        self,
+        sample: BenchmarkSample,
+        ranked_scores: tuple[_RoleScoredObject, ...],
+        policy: InvisibleSelectionPolicy,
+        acceptor_model: dict[str, object],
+    ) -> tuple[_RoleScoredObject, ...]:
+        feature_names = [str(item) for item in acceptor_model.get("feature_names", [])]
+        normalization = acceptor_model.get("normalization", {})
+        if not isinstance(normalization, dict):
+            normalization = {}
+        means = [float(item) for item in normalization.get("mean", [])]
+        stds = [float(item) if float(item) != 0.0 else 1.0 for item in normalization.get("std", [])]
+        w1 = [
+            [float(value) for value in row]
+            for row in acceptor_model.get("w1", [])
+            if isinstance(row, list)
+        ]
+        b1 = [float(value) for value in acceptor_model.get("b1", [])]
+        w2 = [float(value) for value in acceptor_model.get("w2", [])]
+        b2 = float(acceptor_model.get("b2", 0.0))
+        threshold = float(acceptor_model.get("threshold", 0.5))
+        if (
+            not feature_names
+            or len(feature_names) != len(means)
+            or len(feature_names) != len(stds)
+            or not w1
+            or len(w1) != len(b1)
+            or len(w1) != len(w2)
+            or any(len(row) != len(feature_names) for row in w1)
+        ):
+            return ()
+
+        scored: list[tuple[float, _RoleScoredObject]] = []
+        for rank, item in enumerate(ranked_scores, start=1):
+            raw_features = self._logreg_feature_values(sample, item, rank, feature_names)
+            normalized = [
+                (value - means[index]) / stds[index]
+                for index, value in enumerate(raw_features)
+            ]
+            hidden_values = [
+                tanh(bias + sum(weight * value for weight, value in zip(row, normalized)))
+                for row, bias in zip(w1, b1)
+            ]
+            logit = b2 + sum(weight * value for weight, value in zip(w2, hidden_values))
+            probability = self._sigmoid(logit)
+            if probability >= threshold:
+                scored.append((probability, item))
+
+        return tuple(
+            item
+            for _, item in sorted(
+                scored,
+                key=lambda value: (
+                    -value[0],
+                    value[1].distance_to_trajectory,
+                    value[1].distance_to_asker,
+                    -value[1].support_count,
+                    value[1].object_track.object_id,
+                ),
+            )[: policy.max_results]
+        )
+
+    def _top_hidden_relevant_logreg_lateral_rescue(
+        self,
+        sample: BenchmarkSample,
+        selection_policy: InvisibleSelectionPolicy,
+        acceptor_model: dict[str, object],
+    ) -> QueryResult:
+        policy = selection_policy
+        ranked_scores = self._ranked_role_scores(
+            sample,
+            role="hidden_relevant",
+            max_results=max(policy.shortlist_size, policy.max_results),
+            min_distance_to_asker=policy.min_distance_to_asker,
+            max_distance_to_trajectory=policy.max_distance_to_trajectory,
+        )
+        accepted = self._accepted_logreg_hidden_items(sample, ranked_scores, policy, acceptor_model)
+        if accepted:
+            return QueryResult(scene=sample.scene, objects=tuple(item.object_track for item in accepted))
+
+        asker = next(
+            (agent for agent in sample.scene.agents if agent.agent_id == sample.scene.asker_agent_id),
+            None,
+        )
+        selected: list[_RoleScoredObject] = []
+        for item in ranked_scores:
+            track = item.object_track
+            if track.status == TrackStatus.CANDIDATE:
+                continue
+            if item.support_count < policy.rescue_min_support_count:
+                continue
+            if item.distance_to_trajectory < policy.rescue_min_distance_to_trajectory:
+                continue
+            if asker is not None:
+                relative_x = track.position.x - asker.pose.position.x
+                relative_y = track.position.y - asker.pose.position.y
+                if relative_x <= policy.rescue_min_relative_x:
+                    continue
+                if abs(relative_y) < policy.rescue_min_abs_y:
+                    continue
+            selected.append(item)
+            if len(selected) >= policy.max_results:
+                break
+
+        return QueryResult(scene=sample.scene, objects=tuple(item.object_track for item in selected))
 
     def _render_objects(
         self,
@@ -834,15 +1741,31 @@ class OccludingObjectsHandler(_BaseQueryHandler):
 
     def __init__(
         self,
+        ranker: str = "risk_adaptive",
         llm_client: OccludingObjectsBatchLLMClient | None = None,
+        selection_policy: OccludingSelectionPolicy | None = None,
     ) -> None:
         super().__init__()
+        self._ranker = ranker
         self._llm_client = llm_client
+        self._selection_policy = selection_policy or OccludingSelectionPolicy()
 
     def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
         result = (
             self._top_occluding_objects_with_llm(sample, self._llm_client)
             if self._llm_client is not None
+            else
+            self._top_occluding_objects_risk_adaptive(sample, self._selection_policy)
+            if self._ranker == "risk_adaptive"
+            else
+            self._top_occluding_objects_hybrid_top3(sample)
+            if self._ranker == "top3_hybrid"
+            else
+            self._top_occluding_objects_far_supported_top3(sample)
+            if self._ranker == "top3_far_supported"
+            else
+            self._top_occluding_objects_open_top3(sample)
+            if self._ranker == "top3_open"
             else self._top_occluding_objects(sample)
         )
         return self._render_objects(
@@ -859,8 +1782,65 @@ class InvisibleObjectsHandler(_BaseQueryHandler):
 
     task_type = BenchmarkTaskType.INVISIBLE_OBJECTS
 
+    def __init__(
+        self,
+        ranker: str = "legacy",
+        selection_policy: InvisibleSelectionPolicy | None = None,
+        acceptor_model: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__()
+        if ranker not in {
+            "legacy",
+            "risk_adaptive",
+            "road_region",
+            "road_region_strict",
+            "temporal_guard",
+            "backtrack_guard",
+            "logreg_acceptor",
+            "mlp_acceptor",
+            "logreg_legacy_fallback",
+            "logreg_lateral_rescue",
+        }:
+            raise ValueError(f"Unsupported invisible-object ranker: {ranker}")
+        self._ranker = ranker
+        self._selection_policy = selection_policy or InvisibleSelectionPolicy()
+        self._acceptor_model = acceptor_model or {}
+
     def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
-        result = self._top_hidden_relevant(sample)
+        result = (
+            self._top_hidden_relevant_risk_adaptive(sample, self._selection_policy)
+            if self._ranker == "risk_adaptive"
+            else self._top_hidden_relevant_road_region(sample, self._selection_policy)
+            if self._ranker == "road_region"
+            else self._top_hidden_relevant_road_region(
+                sample,
+                replace(
+                    self._selection_policy,
+                    lateral_relevance_bonus=max(self._selection_policy.lateral_relevance_bonus, 0.45),
+                    far_centerline_abs_y=max(self._selection_policy.far_centerline_abs_y, 1.5),
+                    far_centerline_penalty=max(self._selection_policy.far_centerline_penalty, 1.25),
+                    road_region_min_score=max(self._selection_policy.road_region_min_score, 0.5),
+                ),
+            )
+            if self._ranker == "road_region_strict"
+            else self._top_hidden_relevant_temporal_guard(sample, self._selection_policy)
+            if self._ranker == "temporal_guard"
+            else self._top_hidden_relevant_backtrack_guard(sample, self._selection_policy)
+            if self._ranker == "backtrack_guard"
+            else self._top_hidden_relevant_logreg_acceptor(sample, self._selection_policy, self._acceptor_model)
+            if self._ranker == "logreg_acceptor"
+            else self._top_hidden_relevant_mlp_acceptor(sample, self._selection_policy, self._acceptor_model)
+            if self._ranker == "mlp_acceptor"
+            else self._top_hidden_relevant_logreg_lateral_rescue(sample, self._selection_policy, self._acceptor_model)
+            if self._ranker == "logreg_lateral_rescue"
+            else (
+                logreg_result
+                if (logreg_result := self._top_hidden_relevant_logreg_acceptor(sample, self._selection_policy, self._acceptor_model)).objects
+                else self._top_hidden_relevant(sample, selection_policy=self._selection_policy)
+            )
+            if self._ranker == "logreg_legacy_fallback"
+            else self._top_hidden_relevant(sample, selection_policy=self._selection_policy)
+        )
         return self._render_objects(
             sample,
             task_type=self.task_type,
@@ -1237,9 +2217,13 @@ class PlanningAwarenessHandler(_BaseQueryHandler):
     def __init__(
         self,
         orchestrator: PlanningAwarenessOrchestrator | None = None,
+        selection_source: str = "composition",
     ) -> None:
         super().__init__()
         self._orchestrator = orchestrator or build_planning_awareness_orchestrator()
+        if selection_source not in {"composition", "orchestrator"}:
+            raise ValueError(f"Unsupported planning-awareness selection source: {selection_source}")
+        self._selection_source = selection_source
 
     def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
         planning_result = self._planning_awareness_objects(sample)
@@ -1278,6 +2262,13 @@ class PlanningAwarenessHandler(_BaseQueryHandler):
         )
 
     def _planning_awareness_objects(self, sample: BenchmarkSample) -> QueryResult:
+        if self._selection_source == "orchestrator":
+            decision = self._orchestrator.select(sample.scene)
+            return QueryResult(
+                scene=sample.scene,
+                objects=tuple(candidate.object_track for candidate in decision.selected_candidates),
+            )
+
         hidden_result = self._prefer_grounded_objects(
             self._top_hidden_relevant(sample, max_results=1)
         )

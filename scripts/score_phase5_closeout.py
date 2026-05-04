@@ -76,6 +76,52 @@ def load_jsonl(path: Path) -> dict[str, dict[str, object]]:
     return records
 
 
+def resolve_manifest_path(manifest_path: Path, path_value: str) -> Path:
+    path = Path(path_value).expanduser()
+    if path.is_absolute():
+        return path
+    cwd_path = path.resolve()
+    if cwd_path.exists():
+        return cwd_path
+    return (manifest_path.parent / path).resolve()
+
+
+def infer_task_types(manifest: dict[str, object], runs: list[object]) -> tuple[BenchmarkTaskType, ...]:
+    inferred: list[BenchmarkTaskType] = []
+    seen: set[BenchmarkTaskType] = set()
+
+    raw_task_types = manifest.get("task_types", [])
+    if isinstance(raw_task_types, list):
+        for value in raw_task_types:
+            task_type = BenchmarkTaskType(str(value))
+            if task_type in seen:
+                continue
+            inferred.append(task_type)
+            seen.add(task_type)
+
+    for run in runs:
+        if not isinstance(run, dict) or "task_type" not in run:
+            continue
+        task_type = BenchmarkTaskType(str(run["task_type"]))
+        if task_type in seen:
+            continue
+        inferred.append(task_type)
+        seen.add(task_type)
+    return tuple(inferred)
+
+
+def run_value(run: dict[str, object], manifest: dict[str, object], key: str, default: str) -> str:
+    value = run.get(key, manifest.get(key, default))
+    return str(value)
+
+
+def run_total_samples(run: dict[str, object], prediction_records: dict[str, dict[str, object]]) -> int:
+    value = run.get("total_samples")
+    if value is not None:
+        return int(value)
+    return len(prediction_records)
+
+
 def normalize_ids(record: dict[str, object]) -> tuple[str, ...]:
     values = record.get("object_ids", [])
     if not isinstance(values, list):
@@ -151,7 +197,9 @@ def main() -> None:
     adapter = V2VGoTQABenchmarkAdapter(str(repository_root))
     evaluator = V2VGoTQAPhase5AEvaluator(str(repository_root))
 
-    task_types = tuple(BenchmarkTaskType(value) for value in manifest.get("task_types", []))
+    task_types = infer_task_types(manifest, runs)
+    if not task_types:
+        raise SystemExit("Closeout manifest contains no task_types and no task_type values in runs.")
     split = str(manifest.get("split", "val"))
     all_samples = adapter.load_samples(split_name=split)
     samples_by_task = {
@@ -185,7 +233,7 @@ def main() -> None:
             continue
         task_type_value = str(run["task_type"])
         task_type = BenchmarkTaskType(task_type_value)
-        prediction_records = load_jsonl(Path(str(run["output_jsonl"])))
+        prediction_records = load_jsonl(resolve_manifest_path(manifest_path, str(run["output_jsonl"])))
         tp = fp = fn = exact_match_count = 0
         unresolved_reference_mentions = 0
         resolved_reference_mentions = 0
@@ -210,11 +258,11 @@ def main() -> None:
 
         scenario_score = ScenarioScore(
             task_type=task_type_value,
-            scenario_name=str(run["scenario_name"]),
-            baseline_mode=str(run["baseline_mode"]),
-            planning_ranker=str(run["planning_ranker"]),
-            planning_selection_policy=str(run["planning_selection_policy"]),
-            total_samples=int(run["total_samples"]),
+            scenario_name=run_value(run, manifest, "scenario_name", manifest_path.stem),
+            baseline_mode=run_value(run, manifest, "baseline_mode", "cooperative"),
+            planning_ranker=run_value(run, manifest, "planning_ranker", "heuristic"),
+            planning_selection_policy=run_value(run, manifest, "planning_selection_policy", "default"),
+            total_samples=run_total_samples(run, prediction_records),
             exact_match_count=exact_match_count,
             tp=tp,
             fp=fp,

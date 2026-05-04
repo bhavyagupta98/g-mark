@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kg-coop-runtime-gpu-idle
+  namespace: seelab
+  labels:
+    app: kg-coop-runtime-gpu-idle
+spec:
+  restartPolicy: OnFailure
+  tolerations:
+    - key: nautilus.io/reservation
+      operator: Exists
+      effect: NoSchedule
+    - effect: PreferNoSchedule
+      key: nvidia.com/gpu
+      operator: Exists
+    - key: nautilus.io/issue
+      operator: Exists
+      effect: NoSchedule
+
+  containers:
+    - name: gpu-idle
+      image: nvidia/cuda:12.4.1-base-ubuntu22.04
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          #!/usr/bin/env bash
+          set -euxo pipefail
+
+          echo "[INFO] Installing system deps..."
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            git \
+            git-lfs \
+            openssh-client \
+            bzip2 \
+            unzip \
+            vim \
+            tmux \
+            less \
+            nano \
+            python3 \
+            python3-pip
+
+          echo "[INFO] Python version:"
+          python3 --version
+
+          git lfs install
+
+          echo "[INFO] Installing micromamba..."
+          mkdir -p /tmp/micromamba
+          curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest \
+            | tar -xvj -C /tmp/micromamba --strip-components=1 bin/micromamba
+
+          export PATH=/tmp/micromamba:$PATH
+          export MAMBA_ROOT_PREFIX=/tmp/micromamba-root
+
+          echo "[INFO] Creating clean env..."
+          rm -rf /tmp/ct_env
+          micromamba create -y -p /tmp/ct_env -c conda-forge python=3.8 pip
+
+          echo "[INFO] Installing Python deps..."
+          micromamba run -p /tmp/ct_env python -m pip install --upgrade pip
+
+          micromamba run -p /tmp/ct_env pip install \
+            torch==1.10.2+cu113 \
+            torchvision==0.11.3+cu113 \
+            torchaudio==0.10.2+cu113 \
+            --extra-index-url https://download.pytorch.org/whl/cu113
+
+          micromamba run -p /tmp/ct_env pip install \
+            pytorch-lightning==1.4.9 \
+            torchmetrics==0.6.0 \
+            numpy \
+            matplotlib \
+            scikit-learn \
+            pandas \
+            tqdm
+
+          echo "[INFO] Fixing MNIST script..."
+          sed -i 's/download=False/download=True/g' \
+            /workspace/concept_transformer/data/mnist_dataset.py || true
+
+          echo "[INFO] Downloading MNIST manually..."
+          mkdir -p /workspace/data/MNIST/raw
+          cd /workspace/data/MNIST/raw
+
+          curl -L -O https://ossci-datasets.s3.amazonaws.com/mnist/train-images-idx3-ubyte.gz
+          curl -L -O https://ossci-datasets.s3.amazonaws.com/mnist/train-labels-idx1-ubyte.gz
+          curl -L -O https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz
+          curl -L -O https://ossci-datasets.s3.amazonaws.com/mnist/t10k-labels-idx1-ubyte.gz
+
+          cd /workspace/concept_transformer
+
+          echo "[INFO] Checking CUDA..."
+          micromamba run -p /tmp/ct_env python - <<'PY'
+          import torch
+          print("torch:", torch.__version__)
+          print("cuda available:", torch.cuda.is_available())
+          if torch.cuda.is_available():
+              print("gpu:", torch.cuda.get_device_name(0))
+          PY
+
+          echo "[INFO] Setup done."
+          echo "Run training with:"
+          echo "export PATH=/tmp/micromamba:\$PATH"
+          echo "export MAMBA_ROOT_PREFIX=/tmp/micromamba-root"
+          echo "micromamba run -p /tmp/ct_env python /workspace/concept_transformer/ctc_mnist.py"
+
+          nvidia-smi || true
+          sleep infinity
+
+      resources:
+        requests:
+          cpu: "2"
+          memory: "8Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "2"
+          memory: "8Gi"
+          nvidia.com/gpu: "1"
+
+      volumeMounts:
+        - name: storage
+          mountPath: /workspace
+
+  volumes:
+    - name: storage
+      persistentVolumeClaim:
+        claimName: bgupta-pvc

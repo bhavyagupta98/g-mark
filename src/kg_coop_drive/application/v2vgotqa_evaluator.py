@@ -57,11 +57,13 @@ class V2VGoTQAPhase5AEvaluator:
         self,
         samples: tuple[BenchmarkSample, ...],
         baseline_mode: str = "cooperative",
+        progress_every: int = 0,
     ) -> tuple[BenchmarkPrediction, ...]:
         """Evaluate one batch of benchmark samples."""
 
         predictions: list[BenchmarkPrediction] = []
-        for sample in samples:
+        total_samples = len(samples)
+        for index, sample in enumerate(samples, start=1):
             prepared_scene = self.prepare_sample(
                 sample=sample,
                 baseline_mode=baseline_mode,
@@ -81,6 +83,12 @@ class V2VGoTQAPhase5AEvaluator:
                     baseline_mode=baseline_mode,
                 )
             )
+            if progress_every > 0 and (index == 1 or index % progress_every == 0 or index == total_samples):
+                print(
+                    f"progress: {index}/{total_samples} "
+                    f"task={sample.task_type.value} sample_id={sample.sample_id}",
+                    flush=True,
+                )
         return tuple(predictions)
 
     @staticmethod

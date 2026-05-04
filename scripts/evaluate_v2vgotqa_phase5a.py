@@ -6,7 +6,9 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
@@ -20,6 +22,8 @@ from kg_coop_drive.application.planning_awareness import (
     build_planning_awareness_orchestrator,
 )
 from kg_coop_drive.application.v2vgotqa_router import (
+    InvisibleObjectsHandler,
+    InvisibleSelectionPolicy,
     NotableObjectsHandler,
     OccludingObjectsHandler,
     PlanningAwarenessHandler,
@@ -51,7 +55,7 @@ def resolve_v2vgot_root() -> Path:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate Phase 5A V2V-GoT-QA tasks.")
     parser.add_argument("--split", default="val", choices=("val", "train"))
-    parser.add_argument("--limit", type=int, default=25)
+    parser.add_argument("--limit", type=int, default=25, help="Maximum samples to evaluate. Use 0 for the full split.")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
     parser.add_argument(
         "--task-type",
@@ -77,6 +81,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Final selection policy used for planning-awareness outputs.",
     )
     parser.add_argument(
+        "--planning-selection-source",
+        default="composition",
+        choices=("composition", "orchestrator"),
+        help=(
+            "Q4 selection source. `composition` preserves the current benchmark checkpoint "
+            "path; `orchestrator` evaluates the pluggable planning-awareness ranker/policy."
+        ),
+    )
+    parser.add_argument(
+        "--planning-acceptor-model-json",
+        default="",
+        help="Frozen Q4 planning-awareness acceptor model for acceptor-based planning policies.",
+    )
+    parser.add_argument(
         "--notable-ranker",
         default="heuristic",
         choices=("heuristic", "energy", "llm"),
@@ -84,16 +102,52 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--occluding-ranker",
-        default="heuristic",
-        choices=("heuristic", "llm"),
+        default="risk_adaptive",
+        choices=("heuristic", "top3_open", "top3_far_supported", "top3_hybrid", "risk_adaptive", "llm"),
         help="Occluding-objects ranker. `llm` reranks geometric blocker candidates with the local model.",
     )
+    parser.add_argument(
+        "--invisible-ranker",
+        default="legacy",
+        choices=(
+            "legacy",
+            "risk_adaptive",
+            "road_region",
+            "road_region_strict",
+            "temporal_guard",
+            "backtrack_guard",
+            "logreg_acceptor",
+            "mlp_acceptor",
+            "logreg_legacy_fallback",
+            "logreg_lateral_rescue",
+        ),
+        help=(
+            "Invisible-objects ranker. `legacy` keeps the broad Phase 6 selector; "
+            "`risk_adaptive` applies generic precision gates; `road_region` adds "
+            "generic lateral-road-region scoring; `road_region_strict` suppresses "
+            "far centerline clutter more aggressively; `temporal_guard` suppresses "
+            "repeated far-behind centerline clutter on top of legacy ranking; "
+            "`backtrack_guard` suppresses behind-centerline candidates that sit very near the trajectory; "
+            "`logreg_acceptor` loads a train-calibrated logistic model; "
+            "`mlp_acceptor` loads a compact train-calibrated MLP model; "
+            "`logreg_legacy_fallback` uses the calibrated model when accepted, otherwise falls back to legacy; "
+            "`logreg_lateral_rescue` rescues train-mined ahead/lateral supported candidates when logreg is empty."
+        ),
+    )
+    parser.add_argument("--invisible-acceptor-model-json", default="")
+    parser.add_argument("--invisible-max-results", type=int, default=1)
+    parser.add_argument("--invisible-shortlist-size", type=int, default=6)
+    parser.add_argument("--invisible-max-distance-to-trajectory", type=float, default=5.0)
+    parser.add_argument("--invisible-min-risk", type=float, default=0.58)
+    parser.add_argument("--invisible-min-relative-to-best", type=float, default=0.75)
     parser.add_argument("--llm-base-url", default=os.environ.get("KG_LOCAL_LLM_BASE_URL", ""))
     parser.add_argument("--llm-model", default=os.environ.get("KG_LOCAL_LLM_MODEL", ""))
     parser.add_argument("--llm-api-key", default=os.environ.get("KG_LOCAL_LLM_API_KEY", "local-token"))
     parser.add_argument("--llm-timeout-seconds", type=float, default=float(os.environ.get("KG_LOCAL_LLM_TIMEOUT_SECONDS", "180")))
     parser.add_argument("--llm-max-tokens", type=int, default=int(os.environ.get("KG_LOCAL_LLM_MAX_TOKENS", "192")))
     parser.add_argument("--output-jsonl", default="")
+    parser.add_argument("--progress-every", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=1)
     return parser
 
 
@@ -120,10 +174,164 @@ def build_optional_llm_client(args: argparse.Namespace) -> LocalOpenAICompatible
     )
 
 
+def load_invisible_acceptor_model(path_value: str) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_planning_acceptor_model(path_value: str) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def parse_task_types(raw_task_types: list[str]) -> tuple[BenchmarkTaskType, ...]:
     if not raw_task_types:
         return ()
     return tuple(BenchmarkTaskType(value) for value in raw_task_types)
+
+
+def apply_sample_limit(samples: tuple[object, ...], limit: int) -> tuple[object, ...]:
+    if limit <= 0:
+        return samples
+    return samples[:limit]
+
+
+def router_config_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "planning_ranker": args.planning_ranker,
+        "planning_selection_policy": args.planning_selection_policy,
+        "planning_selection_source": args.planning_selection_source,
+        "planning_acceptor_model": load_planning_acceptor_model(args.planning_acceptor_model_json),
+        "notable_ranker": args.notable_ranker,
+        "occluding_ranker": args.occluding_ranker,
+        "invisible_ranker": args.invisible_ranker,
+        "invisible_max_results": args.invisible_max_results,
+        "invisible_shortlist_size": args.invisible_shortlist_size,
+        "invisible_max_distance_to_trajectory": args.invisible_max_distance_to_trajectory,
+        "invisible_min_risk": args.invisible_min_risk,
+        "invisible_min_relative_to_best": args.invisible_min_relative_to_best,
+        "invisible_acceptor_model": load_invisible_acceptor_model(args.invisible_acceptor_model_json),
+    }
+
+
+def build_router(config: dict[str, Any], llm_client: LocalOpenAICompatibleLLMClient | None = None) -> V2VGoTQARouter:
+    planning_orchestrator = build_planning_awareness_orchestrator(
+        str(config["planning_ranker"]),
+        llm_client=llm_client,
+        selection_policy=str(config["planning_selection_policy"]),
+        acceptor_model=dict(config["planning_acceptor_model"]),
+    )
+    return V2VGoTQARouter(
+        handlers=(
+            NotableObjectsHandler(
+                ranker=str(config["notable_ranker"]),
+                llm_client=llm_client if config["notable_ranker"] == "llm" else None,
+            ),
+            OccludingObjectsHandler(
+                ranker=str(config["occluding_ranker"]),
+                llm_client=llm_client if config["occluding_ranker"] == "llm" else None,
+            ),
+            InvisibleObjectsHandler(
+                ranker=str(config["invisible_ranker"]),
+                selection_policy=InvisibleSelectionPolicy(
+                    max_results=int(config["invisible_max_results"]),
+                    shortlist_size=int(config["invisible_shortlist_size"]),
+                    max_distance_to_trajectory=float(config["invisible_max_distance_to_trajectory"]),
+                    min_risk=float(config["invisible_min_risk"]),
+                    min_relative_to_best=float(config["invisible_min_relative_to_best"]),
+                ),
+                acceptor_model=dict(config["invisible_acceptor_model"]),
+            ),
+            PlanningAwarenessHandler(
+                orchestrator=planning_orchestrator,
+                selection_source=str(config["planning_selection_source"]),
+            ),
+        )
+    )
+
+
+def chunk_samples(samples: tuple[object, ...], workers: int) -> list[tuple[object, ...]]:
+    if workers <= 1 or len(samples) <= 1:
+        return [samples]
+    chunk_count = min(workers, len(samples))
+    chunk_size = (len(samples) + chunk_count - 1) // chunk_count
+    return [
+        samples[start : start + chunk_size]
+        for start in range(0, len(samples), chunk_size)
+    ]
+
+
+def evaluate_chunk_worker(payload: tuple[int, tuple[object, ...], str, str, dict[str, Any], int]):
+    chunk_index, samples, repository_root, baseline_mode, router_config, progress_every = payload
+    router = build_router(router_config, llm_client=None)
+    evaluator = V2VGoTQAPhase5AEvaluator(repository_root, router=router)
+    predictions = evaluator.evaluate_samples(
+        samples,
+        baseline_mode=baseline_mode,
+        progress_every=progress_every,
+    )
+    return chunk_index, predictions
+
+
+def evaluate_samples_parallel(
+    *,
+    repository_root: Path,
+    samples: tuple[object, ...],
+    baseline_mode: str,
+    router_config: dict[str, Any],
+    workers: int,
+    progress_every: int,
+):
+    chunks = chunk_samples(samples, workers)
+    if len(chunks) == 1:
+        router = build_router(router_config)
+        evaluator = V2VGoTQAPhase5AEvaluator(str(repository_root), router=router)
+        return evaluator.evaluate_samples(
+            samples,
+            baseline_mode=baseline_mode,
+            progress_every=progress_every,
+        )
+
+    results = []
+    with ProcessPoolExecutor(max_workers=len(chunks)) as executor:
+        futures = [
+            executor.submit(
+                evaluate_chunk_worker,
+                (
+                    index,
+                    chunk,
+                    str(repository_root),
+                    baseline_mode,
+                    router_config,
+                    progress_every,
+                ),
+            )
+            for index, chunk in enumerate(chunks)
+        ]
+        completed_predictions = 0
+        for future in as_completed(futures):
+            chunk_index, chunk_predictions = future.result()
+            results.append((chunk_index, chunk_predictions))
+            completed_predictions += len(chunk_predictions)
+            print(
+                f"parallel_progress: {completed_predictions}/{len(samples)} "
+                f"chunks={len(results)}/{len(chunks)}",
+                flush=True,
+            )
+
+    return tuple(
+        prediction
+        for _, chunk_predictions in sorted(results, key=lambda item: item[0])
+        for prediction in chunk_predictions
+    )
 
 
 def main() -> None:
@@ -131,30 +339,24 @@ def main() -> None:
     repository_root = resolve_v2vgot_root()
     adapter = V2VGoTQABenchmarkAdapter(str(repository_root))
     llm_client = build_optional_llm_client(args)
-    planning_orchestrator = build_planning_awareness_orchestrator(
-        args.planning_ranker,
-        llm_client=llm_client,
-        selection_policy=args.planning_selection_policy,
-    )
-    router = V2VGoTQARouter(
-        handlers=(
-            NotableObjectsHandler(
-                ranker=args.notable_ranker,
-                llm_client=llm_client if args.notable_ranker == "llm" else None,
-            ),
-            OccludingObjectsHandler(llm_client=llm_client if args.occluding_ranker == "llm" else None),
-            PlanningAwarenessHandler(orchestrator=planning_orchestrator),
-        )
-    )
-    evaluator = V2VGoTQAPhase5AEvaluator(str(repository_root), router=router)
+    if args.workers > 1 and llm_client is not None:
+        raise SystemExit("--workers > 1 is only supported for non-LLM rankers.")
+    router_config = router_config_from_args(args)
 
     samples = adapter.load_samples(split_name=args.split, file_name=args.file_name)
     selected_task_types = parse_task_types(args.task_types)
     if selected_task_types:
         samples = tuple(sample for sample in samples if sample.task_type in selected_task_types)
-    samples = samples[: args.limit]
-    predictions = evaluator.evaluate_samples(samples, baseline_mode=args.baseline_mode)
-    summary = evaluator.summarize(predictions)
+    samples = apply_sample_limit(samples, args.limit)
+    predictions = evaluate_samples_parallel(
+        repository_root=repository_root,
+        samples=samples,
+        baseline_mode=args.baseline_mode,
+        router_config=router_config,
+        workers=args.workers,
+        progress_every=args.progress_every,
+    )
+    summary = V2VGoTQAPhase5AEvaluator.summarize(predictions)
 
     print("=" * 72)
     print("Phase 5A V2V-GoT-QA Evaluation")
@@ -164,8 +366,17 @@ def main() -> None:
     print(f"baseline_mode: {args.baseline_mode}")
     print(f"planning_ranker: {args.planning_ranker}")
     print(f"planning_selection_policy: {args.planning_selection_policy}")
+    print(f"planning_selection_source: {args.planning_selection_source}")
+    print(f"planning_acceptor_model_json: {args.planning_acceptor_model_json}")
     print(f"notable_ranker: {args.notable_ranker}")
     print(f"occluding_ranker: {args.occluding_ranker}")
+    print(f"invisible_ranker: {args.invisible_ranker}")
+    print(f"invisible_max_results: {args.invisible_max_results}")
+    print(f"invisible_shortlist_size: {args.invisible_shortlist_size}")
+    print(f"invisible_max_distance_to_trajectory: {args.invisible_max_distance_to_trajectory}")
+    print(f"invisible_min_risk: {args.invisible_min_risk}")
+    print(f"invisible_min_relative_to_best: {args.invisible_min_relative_to_best}")
+    print(f"invisible_acceptor_model_json: {args.invisible_acceptor_model_json}")
     if (
         args.notable_ranker == "llm"
         or args.planning_ranker == PlanningAwarenessRanker.LLM.value
@@ -213,8 +424,16 @@ def main() -> None:
                             "baseline_mode": prediction.baseline_mode,
                             "planning_ranker": args.planning_ranker,
                             "planning_selection_policy": args.planning_selection_policy,
+                            "planning_selection_source": args.planning_selection_source,
+                            "planning_acceptor_model_json": args.planning_acceptor_model_json,
                             "notable_ranker": args.notable_ranker,
                             "occluding_ranker": args.occluding_ranker,
+                            "invisible_ranker": args.invisible_ranker,
+                            "invisible_max_results": args.invisible_max_results,
+                            "invisible_max_distance_to_trajectory": args.invisible_max_distance_to_trajectory,
+                            "invisible_min_risk": args.invisible_min_risk,
+                            "invisible_min_relative_to_best": args.invisible_min_relative_to_best,
+                            "invisible_acceptor_model_json": args.invisible_acceptor_model_json,
                             "llm_base_url": args.llm_base_url if args.notable_ranker == "llm" or args.planning_ranker == PlanningAwarenessRanker.LLM.value or args.occluding_ranker == "llm" else "",
                             "llm_model": args.llm_model if args.notable_ranker == "llm" or args.planning_ranker == PlanningAwarenessRanker.LLM.value or args.occluding_ranker == "llm" else "",
                             "llm_timeout_seconds": args.llm_timeout_seconds if args.notable_ranker == "llm" or args.planning_ranker == PlanningAwarenessRanker.LLM.value or args.occluding_ranker == "llm" else 0,

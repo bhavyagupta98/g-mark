@@ -98,11 +98,11 @@ spec:
           tail -f /dev/null
       resources:
         requests:
-          cpu: "2"
-          memory: "8Gi"
+          cpu: "8"
+          memory: "32Gi"
         limits:
-          cpu: "2"
-          memory: "8Gi"
+          cpu: "8"
+          memory: "32Gi"
       volumeMounts:
         - name: storage
           mountPath: /workspace

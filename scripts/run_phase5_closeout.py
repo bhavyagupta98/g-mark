@@ -13,6 +13,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from kg_coop_drive.application.planning_awareness import (  # noqa: E402
     PlanningAwarenessRanker,
@@ -20,6 +23,7 @@ from kg_coop_drive.application.planning_awareness import (  # noqa: E402
 )
 from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
 from kg_coop_drive.application.v2vgotqa_router import (  # noqa: E402
+    InvisibleObjectsHandler,
     NotableObjectsHandler,
     OccludingObjectsHandler,
     PlanningAwarenessHandler,
@@ -80,7 +84,7 @@ def resolve_v2vgot_root() -> Path:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a Phase 5 closeout matrix across supported tasks.")
     parser.add_argument("--split", default="val", choices=("val", "train"))
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=int, default=100, help="Maximum samples per task. Use 0 for the full split.")
     parser.add_argument(
         "--task-type",
         action="append",
@@ -106,10 +110,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--occluding-ranker",
-        default="heuristic",
-        choices=("heuristic", "llm"),
+        default="risk_adaptive",
+        choices=("heuristic", "top3_open", "top3_far_supported", "top3_hybrid", "risk_adaptive", "llm"),
         help="Occluding-objects ranker. `llm` reranks geometric blocker candidates with the local model.",
     )
+    parser.add_argument(
+        "--invisible-ranker",
+        default="legacy",
+        choices=(
+            "legacy",
+            "risk_adaptive",
+            "road_region",
+            "road_region_strict",
+            "temporal_guard",
+            "backtrack_guard",
+            "logreg_acceptor",
+            "logreg_legacy_fallback",
+            "logreg_lateral_rescue",
+        ),
+        help=(
+            "Invisible-objects ranker. `legacy` keeps the broad Phase 6 selector; "
+            "`risk_adaptive` applies generic precision gates; `road_region` adds "
+            "generic lateral-road-region scoring; `road_region_strict` suppresses "
+            "far centerline clutter more aggressively; `temporal_guard` suppresses "
+            "repeated far-behind centerline clutter on top of legacy ranking; "
+            "`backtrack_guard` suppresses behind-centerline candidates that sit very near the trajectory; "
+            "`logreg_acceptor` loads a train-calibrated logistic model; "
+            "`logreg_legacy_fallback` uses the calibrated model when accepted, otherwise falls back to legacy; "
+            "`logreg_lateral_rescue` rescues train-mined ahead/lateral supported candidates when logreg is empty."
+        ),
+    )
+    parser.add_argument("--invisible-acceptor-model-json", default="")
     parser.add_argument(
         "--full-sweep-all-tasks",
         action="store_true",
@@ -128,6 +159,12 @@ def select_task_types(raw_task_types: list[str]) -> tuple[BenchmarkTaskType, ...
     return tuple(BenchmarkTaskType(value) for value in raw_task_types)
 
 
+def apply_sample_limit(samples: tuple[object, ...], limit: int) -> tuple[object, ...]:
+    if limit <= 0:
+        return samples
+    return samples[:limit]
+
+
 def build_optional_llm_client(args: argparse.Namespace) -> LocalOpenAICompatibleLLMClient | None:
     if not args.llm_base_url or not args.llm_model:
         return None
@@ -140,6 +177,15 @@ def build_optional_llm_client(args: argparse.Namespace) -> LocalOpenAICompatible
             max_tokens=args.llm_max_tokens,
         )
     )
+
+
+def load_invisible_acceptor_model(path_value: str) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def load_jsonl(path: Path) -> dict[str, dict[str, object]]:
@@ -245,6 +291,7 @@ def main() -> None:
         "full_sweep_all_tasks": args.full_sweep_all_tasks,
         "notable_ranker": args.notable_ranker,
         "occluding_ranker": args.occluding_ranker,
+        "invisible_ranker": args.invisible_ranker,
         "task_types": [task_type.value for task_type in task_types],
         "tasks": {},
     }
@@ -258,6 +305,7 @@ def main() -> None:
         f"- `full_sweep_all_tasks`: `{args.full_sweep_all_tasks}`",
         f"- `notable_ranker`: `{args.notable_ranker}`",
         f"- `occluding_ranker`: `{args.occluding_ranker}`",
+        f"- `invisible_ranker`: `{args.invisible_ranker}`",
         f"- `tasks`: `{', '.join(task_type.value for task_type in task_types)}`",
         "",
         "Published references below are target context from the V2V-GoT paper. Our current outputs are structural prediction comparisons, not reproduced benchmark F1/L2 scores.",
@@ -272,10 +320,14 @@ def main() -> None:
     print(f"limit: {args.limit}")
     print(f"notable_ranker: {args.notable_ranker}")
     print(f"occluding_ranker: {args.occluding_ranker}")
+    print(f"invisible_ranker: {args.invisible_ranker}")
     print(f"tasks: {[task_type.value for task_type in task_types]}")
 
     for task_type in task_types:
-        task_samples = tuple(sample for sample in all_samples if sample.task_type == task_type)[: args.limit]
+        task_samples = apply_sample_limit(
+            tuple(sample for sample in all_samples if sample.task_type == task_type),
+            args.limit,
+        )
         if not task_samples:
             print(f"[SKIP] task={task_type.value}: no samples")
             continue
@@ -304,7 +356,14 @@ def main() -> None:
                         ranker=args.notable_ranker,
                         llm_client=llm_client if args.notable_ranker == "llm" else None,
                     ),
-                    OccludingObjectsHandler(llm_client=llm_client if args.occluding_ranker == "llm" else None),
+                    OccludingObjectsHandler(
+                        ranker=args.occluding_ranker,
+                        llm_client=llm_client if args.occluding_ranker == "llm" else None,
+                    ),
+                    InvisibleObjectsHandler(
+                        ranker=args.invisible_ranker,
+                        acceptor_model=load_invisible_acceptor_model(args.invisible_acceptor_model_json),
+                    ),
                     PlanningAwarenessHandler(orchestrator=orchestrator),
                 )
             )
@@ -460,6 +519,7 @@ def main() -> None:
                 "limit": args.limit,
                 "notable_ranker": args.notable_ranker,
                 "occluding_ranker": args.occluding_ranker,
+                "invisible_ranker": args.invisible_ranker,
                 "task_types": [task_type.value for task_type in task_types],
                 "runs": [asdict(run) for run in manifest_runs],
             },
