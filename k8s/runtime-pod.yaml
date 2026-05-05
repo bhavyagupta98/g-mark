@@ -58,23 +58,11 @@ spec:
           check_path "Workspace directory" "${WORKSPACE}"
           check_path "kg_coop_drive repo" "${KG_REPO_DIR}"
           check_path "V2V-GoT repo" "${V2VGOT_ROOT}"
-          check_path "Phase 1 script" "${KG_REPO_DIR}/scripts/complete_phase1.py"
-          check_path "Phase 2 demo script" "${KG_REPO_DIR}/scripts/demo_phase2_scene_query.py"
+          check_path "QA split pipeline script" "${KG_REPO_DIR}/scripts/run_qa_split_pipeline.py"
+          check_path "QA router evaluator script" "${KG_REPO_DIR}/scripts/evaluate_qa_router.py"
           check_path "Val co_llm QA dataset" "${V2VGOT_ROOT}/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json"
 
           cd "${KG_REPO_DIR}"
-
-          echo
-          echo "============================================================"
-          echo "Running Phase 1 Completion Summary"
-          echo "============================================================"
-          python3 scripts/complete_phase1.py | tee /tmp/phase1_completion.log
-
-          echo
-          echo "============================================================"
-          echo "Running Phase 2 Demo"
-          echo "============================================================"
-          python3 scripts/demo_phase2_scene_query.py | tee /tmp/phase2_demo.log
 
           echo
           echo "============================================================"
@@ -90,8 +78,6 @@ spec:
           echo "Runtime Pod Ready"
           echo "============================================================"
           echo "[INFO] Logs saved to:"
-          echo "[INFO]   /tmp/phase1_completion.log"
-          echo "[INFO]   /tmp/phase2_demo.log"
           echo "[INFO]   /tmp/phase2_tests.log"
           echo "[INFO] Pod will remain running for interactive use."
 
