@@ -1,0 +1,23 @@
+{
+  "repository_root": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+  "split": "val",
+  "scenario_name": "smoke_q9_future_trajectory_export_only",
+  "task_types": [
+    "future_trajectory"
+  ],
+  "runs": [
+    {
+      "task_type": "future_trajectory",
+      "scenario_name": "smoke_q9_future_trajectory_export_only",
+      "baseline_mode": "cooperative",
+      "planning_ranker": "heuristic",
+      "planning_selection_policy": "default",
+      "planning_selection_source": "composition",
+      "planning_acceptor_model_json": "",
+      "output_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/smoke_q9_future_trajectory_export_only.jsonl",
+      "supported_predictions": 2,
+      "unsupported_predictions": 0,
+      "total_samples": 2
+    }
+  ]
+}

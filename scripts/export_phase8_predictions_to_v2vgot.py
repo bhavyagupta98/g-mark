@@ -29,6 +29,17 @@ OFFICIAL_QA_TYPE_BY_TASK = {
     BenchmarkTaskType.OCCLUDING_OBJECTS: 12,
     BenchmarkTaskType.INVISIBLE_OBJECTS: 13,
     BenchmarkTaskType.PLANNING_AWARENESS: 14,
+    BenchmarkTaskType.OBJECT_MOTION_PREDICTION: 15,
+    BenchmarkTaskType.AGENT_MOTION_PREDICTION: 16,
+    BenchmarkTaskType.CONTROL_SETTINGS: 18,
+    BenchmarkTaskType.FUTURE_TRAJECTORY: 19,
+}
+
+OBJECT_GROUNDING_TASKS = {
+    BenchmarkTaskType.NOTABLE_OBJECTS,
+    BenchmarkTaskType.OCCLUDING_OBJECTS,
+    BenchmarkTaskType.INVISIBLE_OBJECTS,
+    BenchmarkTaskType.PLANNING_AWARENESS,
 }
 
 
@@ -91,6 +102,11 @@ def normalize_ids(record: dict[str, object]) -> tuple[str, ...]:
     return tuple(str(item) for item in values)
 
 
+def prediction_answer_text(record: dict[str, object]) -> str:
+    value = record.get("answer_text", "")
+    return value if isinstance(value, str) else ""
+
+
 def parse_task_types(raw_values: list[str]) -> tuple[BenchmarkTaskType, ...]:
     if not raw_values:
         return ()
@@ -101,7 +117,11 @@ def output_text_for_task(
     task_type: BenchmarkTaskType,
     scene: CooperativeScene,
     object_ids: tuple[str, ...],
+    answer_text: str = "",
 ) -> str:
+    if task_type not in OBJECT_GROUNDING_TASKS:
+        return answer_text
+
     if not object_ids:
         if task_type == BenchmarkTaskType.OCCLUDING_OBJECTS:
             return "There is no object obstructing your view."
@@ -127,7 +147,7 @@ def output_text_for_task(
             phrases.append(f"There is a car at {location} visible to you.")
 
     if not phrases:
-        return output_text_for_task(task_type, scene, ())
+        return output_text_for_task(task_type, scene, (), answer_text)
     return " ".join(phrases)
 
 
@@ -161,7 +181,12 @@ def export_task(
             object_ids = normalize_ids(prediction)
             missing_objects += sum(1 for object_id in object_ids if prepared_scene.get_object(object_id) is None)
             output_record = dict(sample.raw_record)
-            output_record["outputs"] = output_text_for_task(task_type, prepared_scene, object_ids)
+            output_record["outputs"] = output_text_for_task(
+                task_type,
+                prepared_scene,
+                object_ids,
+                prediction_answer_text(prediction),
+            )
             output_record["kg_prediction"] = {
                 "sample_id": sample_id,
                 "task_type": task_type.value,

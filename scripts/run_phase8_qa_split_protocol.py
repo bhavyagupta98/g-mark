@@ -17,17 +17,26 @@ QA_TASKS = {
     "planning_awareness",
 }
 
+DEFERRED_TASKS = {
+    "object_motion_prediction",
+    "agent_motion_prediction",
+    "control_settings",
+    "future_trajectory",
+}
+
+ALL_TASKS = QA_TASKS | DEFERRED_TASKS
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the Phase 8 QA split protocol. Use purpose=train_dev for "
+            "Run the Phase 8/9 QA split protocol. Use purpose=train_dev for "
             "policy development and purpose=val_report for held-out reporting."
         )
     )
     parser.add_argument("--purpose", required=True, choices=("train_dev", "val_report"))
     parser.add_argument("--split", required=True, choices=("train", "val"))
-    parser.add_argument("--task-type", required=True, choices=tuple(sorted(QA_TASKS)))
+    parser.add_argument("--task-type", required=True, choices=tuple(sorted(ALL_TASKS)))
     parser.add_argument("--scenario-name", default="")
     parser.add_argument("--limit", type=int, default=0, help="Use 0 for the full split.")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
@@ -60,6 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("composition", "orchestrator"),
     )
     parser.add_argument("--planning-acceptor-model-json", default="")
+    parser.add_argument("--future-trajectory-model-json", default="")
+    parser.add_argument(
+        "--control-selection-policy",
+        default="rule",
+        choices=("rule", "linear_classifier"),
+    )
+    parser.add_argument("--control-model-json", default="")
     parser.add_argument(
         "--occluding-ranker",
         default="risk_adaptive",
@@ -117,6 +133,9 @@ def write_manifest(
     planning_selection_policy: str,
     planning_selection_source: str,
     planning_acceptor_model_json: str,
+    future_trajectory_model_json: str,
+    control_selection_policy: str,
+    control_model_json: str,
     output_jsonl: Path,
     total_samples: int,
 ) -> None:
@@ -134,6 +153,9 @@ def write_manifest(
                 "planning_selection_policy": planning_selection_policy,
                 "planning_selection_source": planning_selection_source,
                 "planning_acceptor_model_json": planning_acceptor_model_json,
+                "future_trajectory_model_json": future_trajectory_model_json,
+                "control_selection_policy": control_selection_policy,
+                "control_model_json": control_model_json,
                 "output_jsonl": str(output_jsonl),
                 "supported_predictions": total_samples,
                 "unsupported_predictions": 0,
@@ -182,6 +204,8 @@ def main() -> None:
         args.planning_selection_policy,
         "--planning-selection-source",
         args.planning_selection_source,
+        "--control-selection-policy",
+        args.control_selection_policy,
         "--notable-ranker",
         args.notable_ranker,
         "--occluding-ranker",
@@ -209,6 +233,10 @@ def main() -> None:
         eval_command.extend(["--invisible-acceptor-model-json", args.invisible_acceptor_model_json])
     if args.planning_acceptor_model_json:
         eval_command.extend(["--planning-acceptor-model-json", args.planning_acceptor_model_json])
+    if args.future_trajectory_model_json:
+        eval_command.extend(["--future-trajectory-model-json", args.future_trajectory_model_json])
+    if args.control_model_json:
+        eval_command.extend(["--control-model-json", args.control_model_json])
     run(eval_command)
 
     total_samples = count_jsonl(prediction_path)
@@ -223,6 +251,9 @@ def main() -> None:
         planning_selection_policy=args.planning_selection_policy,
         planning_selection_source=args.planning_selection_source,
         planning_acceptor_model_json=args.planning_acceptor_model_json,
+        future_trajectory_model_json=args.future_trajectory_model_json,
+        control_selection_policy=args.control_selection_policy,
+        control_model_json=args.control_model_json,
         output_jsonl=prediction_path,
         total_samples=total_samples,
     )
@@ -260,6 +291,15 @@ def main() -> None:
         "--task-type",
         args.task_type,
     ]
+    if args.task_type in DEFERRED_TASKS:
+        official_command.extend(["--num-future-waypoints", "6"])
+        if args.v2vgot_root:
+            official_command.extend(
+                [
+                    "--npy-save-path",
+                    str(Path(args.v2vgot_root) / "DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy"),
+                ]
+            )
     if args.v2vgot_root:
         official_command.extend(["--v2vgot-root", args.v2vgot_root])
     run(official_command)

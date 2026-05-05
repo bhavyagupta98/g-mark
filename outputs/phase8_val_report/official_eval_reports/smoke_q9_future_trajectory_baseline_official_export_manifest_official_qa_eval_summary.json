@@ -1,0 +1,15 @@
+{
+  "export_manifest": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/official_exports/smoke_q9_future_trajectory_baseline_official_export_manifest.json",
+  "v2vgot_root": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+  "evaluator_path": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/official_exports/tools/eval_v2v4real_3d_grounding_qa_only.py",
+  "runs": [
+    {
+      "task_type": "future_trajectory",
+      "qa_type_id": 19,
+      "answers_file": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/official_exports/future_trajectory_smoke_q9_future_trajectory_baseline_official.jsonl",
+      "returncode": 1,
+      "log_path": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/official_eval_reports/future_trajectory_qa_type_19_official_eval.log",
+      "metrics": {}
+    }
+  ]
+}

@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=0.05)
     parser.add_argument("--epochs", type=int, default=600)
     parser.add_argument("--l2", type=float, default=0.01)
+    parser.add_argument("--log-every", type=int, default=0, help="Print epoch progress every N epochs; 0 disables.")
     parser.add_argument("--no-class-balance", action="store_true")
     return parser
 
@@ -117,6 +118,7 @@ def train_logistic(
     epochs: int,
     l2: float,
     class_balance: bool,
+    log_every: int,
 ) -> tuple[float, list[float]]:
     features = [normalized_vector(row, means, stds) for row in rows]
     labels = [1.0 if row.get("candidate_matches_gt") is True else 0.0 for row in rows]
@@ -127,7 +129,7 @@ def train_logistic(
     weights = [0.0 for _ in range(len(features[0]))]
     bias = 0.0
 
-    for _ in range(epochs):
+    for epoch_index in range(epochs):
         grad_weights = [0.0 for _ in weights]
         grad_bias = 0.0
         for vector, label in zip(features, labels):
@@ -143,6 +145,8 @@ def train_logistic(
         for index in range(len(weights)):
             grad = grad_weights[index] * scale + l2 * weights[index]
             weights[index] -= learning_rate * grad
+        if log_every > 0 and ((epoch_index + 1) % log_every == 0 or epoch_index + 1 == epochs):
+            print(f"training_progress: epoch={epoch_index + 1}/{epochs}")
 
     return bias, weights
 
@@ -267,6 +271,7 @@ def main() -> None:
         epochs=args.epochs,
         l2=args.l2,
         class_balance=not args.no_class_balance,
+        log_every=args.log_every,
     )
     train_probabilities = {
         index: predict_probability(row, means, stds, bias, weights)

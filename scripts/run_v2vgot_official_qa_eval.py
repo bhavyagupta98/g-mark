@@ -22,6 +22,11 @@ TASK_LABELS = {
     12: "occluding_objects",
     13: "invisible_objects",
     14: "planning_awareness",
+    15: "object_motion_prediction",
+    16: "agent_motion_prediction",
+    17: "object_motion_prediction",
+    18: "control_settings",
+    19: "future_trajectory",
 }
 
 HEAVY_IMPORT_REPLACEMENTS = {
@@ -55,7 +60,13 @@ HEAVY_IMPORT_REPLACEMENTS = {
         "try:\n"
         "    from V2V4Real.opencood.utils.box_utils import boxes_to_corners_3d, corner_to_center, project_points_by_matrix_torch\n"
         "except ModuleNotFoundError:\n"
-        "    boxes_to_corners_3d = corner_to_center = project_points_by_matrix_torch = None"
+        "    boxes_to_corners_3d = corner_to_center = None\n"
+        "    def project_points_by_matrix_torch(points, transformation_matrix):\n"
+        "        points_array = np.asarray(points)\n"
+        "        transform_array = np.asarray(transformation_matrix)\n"
+        "        ones = np.ones((points_array.shape[0], 1), dtype=points_array.dtype)\n"
+        "        homogeneous = np.concatenate([points_array, ones], axis=1)\n"
+        "        return (homogeneous @ transform_array.T)[:, :3]"
     ),
     "import matplotlib.pyplot as plt": (
         "try:\n"
@@ -124,6 +135,19 @@ METRIC_PATTERNS = {
     "binary_recall": re.compile(r"binary_recall:\s+([0-9.eE+-]+)"),
     "gt_parse_error_rate": re.compile(r"gt_parse_error_rate:\s+([0-9.eE+-]+)"),
     "output_parse_error_rate": re.compile(r"output_parse_error_rate:\s+([0-9.eE+-]+)"),
+    "l2_error_avg_1s": re.compile(r"l2_error_avg_1s:\s+([0-9.eE+-]+)"),
+    "l2_error_avg_2s": re.compile(r"l2_error_avg_2s:\s+([0-9.eE+-]+)"),
+    "l2_error_avg_3s": re.compile(r"l2_error_avg_3s:\s+([0-9.eE+-]+)"),
+    "l2_error_avg_all": re.compile(r"l2_error_avg_all:\s+([0-9.eE+-]+)"),
+    "l2_error_avg_123_all": re.compile(r"l2_error_avg_123_all:\s+([0-9.eE+-]+)"),
+    "l2_error_avg_03_all": re.compile(r"l2_error_avg_03_all:\s+([0-9.eE+-]+)"),
+    "speed_accuracy": re.compile(r"speed_accuracy:\s+([0-9.eE+-]+)"),
+    "steering_accuracy": re.compile(r"steering_accuracy:\s+([0-9.eE+-]+)"),
+    "action_accuracy": re.compile(r"action_accuracy:\s+([0-9.eE+-]+)"),
+    "speed_edit_dist": re.compile(r"speed_edit_dist:\s+([0-9.eE+-]+)"),
+    "steering_edit_dist": re.compile(r"steering_edit_dist:\s+([0-9.eE+-]+)"),
+    "action_edit_dist": re.compile(r"action_edit_dist:\s+([0-9.eE+-]+)"),
+    "binary_classification_accuracy": re.compile(r"binary classification accuracy:\s+([0-9.eE+-]+)"),
 }
 LOCALIZATION_PATTERN = re.compile(
     r"localization_(f1|precision|recall)\s*@?\s*([0-9.]+)?:\s+([0-9.eE+-]+)"
@@ -135,7 +159,7 @@ PLANNING_METRIC_PATTERN = re.compile(r"^(precision|recall|f1):\s+([0-9.eE+-]+)$"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the V2V-GoT/LLaVA simplified Q1-Q4 official evaluator on Phase 8 "
+            "Run the V2V-GoT/LLaVA simplified Q1-Q9 official evaluator on Phase 8/9 "
             "official-style export files, using a persistent QA-only evaluator copy."
         )
     )
@@ -150,6 +174,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--max-num-answer-objects", type=int, default=3)
     parser.add_argument("--num-future-waypoints", type=int, default=0)
+    parser.add_argument(
+        "--npy-save-path",
+        default="",
+        help=(
+            "Optional V2V-GoT npy asset root passed through to the upstream evaluator. "
+            "Q9/Q5 trajectory metrics need lidar poses and GT boxes from this path."
+        ),
+    )
     parser.add_argument(
         "--task-type",
         action="append",
@@ -201,6 +233,21 @@ def patch_evaluator_text(text: str) -> tuple[str, list[str]]:
     if replacement_count == 0 and "num_matched_gt_output_correct_action_count" in text:
         missing_replacements.append("unsafe action_accuracy denominator guard")
 
+    collision_dependency_line = (
+        "    current_ego_lidar_pose = np.load(os.path.join(npy_save_path, 'ego', "
+        "'%04d_lidar_pose.npy' % global_timestamp_index))"
+    )
+    collision_dependency_guard = (
+        "    if any(helper is None for helper in (x1_to_x2, project_points_by_matrix_torch, corner_to_center, Box3D, iou)):\n"
+        "      return False\n"
+        "\n"
+        f"{collision_dependency_line}"
+    )
+    if collision_dependency_line in text:
+        text = text.replace(collision_dependency_line, collision_dependency_guard, 1)
+    elif "def check_has_collision" in text:
+        missing_replacements.append("Q9 collision dependency guard")
+
     for metric_name, pattern in UNSAFE_QA_DIVISION_PATTERNS.items():
         def replace_metric_division(match: re.Match[str], metric_name: str = metric_name) -> str:
             indent = match.group("indent")
@@ -230,7 +277,7 @@ def create_qa_only_evaluator(v2vgot_root: Path, tools_dir: Path) -> Path:
     header = (
         "#!/usr/bin/env python3\n"
         "# Auto-generated by kg_coop_drive/scripts/run_v2vgot_official_qa_eval.py.\n"
-        "# This persistent copy guards import-time dependencies and empty-count QA metric divisions in the simplified Q1-Q4 path.\n\n"
+        "# This persistent copy guards import-time dependencies and empty-count QA metric divisions in the simplified Q1-Q9 path.\n\n"
     )
     if text.startswith("#!"):
         text = "\n".join(text.splitlines()[1:])
@@ -311,6 +358,7 @@ def run_one(
     run: dict[str, object],
     max_num_answer_objects: int,
     num_future_waypoints: int,
+    npy_save_path: str,
 ) -> dict[str, object]:
     task_type = str(run["task_type"])
     qa_type_id = int(run["qa_type_id"])
@@ -332,6 +380,8 @@ def run_one(
         "--num-future-waypoints",
         str(num_future_waypoints),
     ]
+    if npy_save_path:
+        command.extend(["--npy-save-path", npy_save_path])
 
     env = os.environ.copy()
     env["PYTHONPATH"] = build_pythonpath(v2vgot_root)
@@ -374,8 +424,8 @@ def write_markdown(summary: dict[str, object], markdown_path: Path) -> None:
         f"- `v2vgot_root`: `{summary['v2vgot_root']}`",
         f"- `evaluator_path`: `{summary['evaluator_path']}`",
         "",
-        "| Task | QA Type | Return Code | F1 @ 0.5m | Precision @ 0.5m | Recall @ 0.5m | Binary F1 | Parse Error | Log |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Task | QA Type | Return Code | F1 @ 0.5m | Precision @ 0.5m | Recall @ 0.5m | Binary F1 | Deferred Metric | Parse Error | Log |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- |",
     ]
     for run in summary["runs"]:
         metrics = run.get("metrics", {})
@@ -386,10 +436,20 @@ def write_markdown(summary: dict[str, object], markdown_path: Path) -> None:
         recall = threshold_metrics.get("recall", "")
         binary_f1 = metrics.get("binary_f1", "") if isinstance(metrics, dict) else ""
         parse_error = metrics.get("output_parse_error_rate", "") if isinstance(metrics, dict) else ""
+        deferred_metric = ""
+        if isinstance(metrics, dict):
+            if "l2_error_avg_all" in metrics:
+                deferred_metric = f"l2_error_avg_all={metrics['l2_error_avg_all']}"
+            elif "l2_error_avg_123_all" in metrics:
+                deferred_metric = f"l2_error_avg_123_all={metrics['l2_error_avg_123_all']}"
+            elif "action_accuracy" in metrics:
+                deferred_metric = f"action_accuracy={metrics['action_accuracy']}"
+            elif "binary_classification_accuracy" in metrics:
+                deferred_metric = f"binary_classification_accuracy={metrics['binary_classification_accuracy']}"
         lines.append(
             "| "
             + f"`{run['task_type']}` | `{run['qa_type_id']}` | `{run['returncode']}` | "
-            + f"`{f1}` | `{precision}` | `{recall}` | `{binary_f1}` | `{parse_error}` | "
+            + f"`{f1}` | `{precision}` | `{recall}` | `{binary_f1}` | `{deferred_metric}` | `{parse_error}` | "
             + f"`{run['log_path']}` |"
         )
     lines.append("")
@@ -425,6 +485,7 @@ def main() -> int:
             run=run,
             max_num_answer_objects=args.max_num_answer_objects,
             num_future_waypoints=args.num_future_waypoints,
+            npy_save_path=args.npy_save_path,
         )
         for run in runs
     ]

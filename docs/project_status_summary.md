@@ -55,6 +55,86 @@ Dataset:
 - train split: `12290` samples per QA family
 - validation split: `3446` samples per QA family
 
+## Canonical Script Entrypoints
+
+To keep the frozen baseline pipeline readable, use these canonical script names going forward:
+
+- split protocol: `scripts/run_qa_split_pipeline.py`
+- sample evaluation/router execution: `scripts/evaluate_qa_router.py`
+- official export generation: `scripts/export_qa_predictions.py`
+- official QA evaluation: `scripts/evaluate_official_qa.py`
+- Q3 acceptor training: `scripts/train_q3_invisible_acceptor.py`
+- Q4 acceptor training: `scripts/train_q4_planning_acceptor.py`
+- Q4 trajectory calibration setup: `scripts/configure_q4_trajectory_calibration.py`
+- Q8 policy training: `scripts/train_q8_control_policy.py`
+- Q9 trajectory model training: `scripts/train_q9_future_trajectory_regressor.py`
+
+Legacy phase-named scripts are retained for backward compatibility and archival reproducibility.
+
+## E2E Repro Commands
+
+New end-to-end scripts are available under `scripts/e2e/` for full reproducibility checks after refactors.
+
+### 1) Train E2E (Q1/Q2/Q3/Q4/Q8/Q9)
+
+Script:
+
+- `scripts/e2e/run_e2e_train_pipeline.py`
+
+What it does:
+
+- creates a dedicated run folder under `outputs/e2e_runs/<run_name>/`
+- writes Q1/Q2 frozen policy snapshots
+- retrains Q3/Q4/Q8/Q9 models from train split
+- runs train-split official-style evaluations for Q1/Q2/Q3/Q4/Q8/Q9
+- writes model + run manifest:
+  - `outputs/e2e_runs/<run_name>/e2e_model_manifest.json`
+
+Command (8-core example):
+
+```bash
+python3 scripts/e2e/run_e2e_train_pipeline.py \
+  --run-name phase9_e2e_retrain_v1 \
+  --v2vgot-root /workspace/repos/V2V-GoT \
+  --workers 8 \
+  --progress-every 200
+```
+
+Strict split protocol:
+
+- default is strict train-only fitting for Q3/Q4 (no val feature export during training)
+- optional diagnostic mode (not default):
+  - `--allow-val-features-during-training`
+
+### 2) Validation E2E Report (Q1/Q2/Q3/Q4/Q8/Q9)
+
+Script:
+
+- `scripts/e2e/run_e2e_validation_report.py`
+
+What it does:
+
+- loads the E2E model manifest
+- runs held-out validation official-style eval for Q1/Q2/Q3/Q4/Q8/Q9
+- prints report table with:
+  - task
+  - metric
+  - our value
+  - V2V-GoT baseline reference
+  - relative improvement
+- saves:
+  - `outputs/e2e_runs/<run_name>/val_eval/e2e_validation_summary.json`
+  - `outputs/e2e_runs/<run_name>/val_eval/e2e_validation_summary.md`
+
+Command:
+
+```bash
+python3 scripts/e2e/run_e2e_validation_report.py \
+  --manifest-json outputs/e2e_runs/phase9_e2e_retrain_v1/e2e_model_manifest.json \
+  --workers 8 \
+  --progress-every 200
+```
+
 ## From V2V4Real Assets To Our Knowledge Graph
 
 Starting point:
@@ -655,6 +735,23 @@ How to interpret these current ablations:
 | Q3 `invisible_objects` | broad-pool `logreg_acceptor_t0p33`, `shortlist_size=64`, trajectory window `8.0m` | `0.464406 / 0.527863 / 0.414568` | `0.493934 / 0.488014 / 0.500000` | `0.440000` | clears +10% target |
 | Q4 `planning_awareness` | `relational_importance + trajectory_calibrated_acceptor`, duplicate radius `1.0m` | `0.729672 / 0.711258 / 0.749064` | `0.613774 / 0.576685 / 0.655962` | `0.608000` | exceeds V2V-GoT reference |
 
+## Final Promoted Checkpoints (Quick View)
+
+| Task | Promoted Checkpoint | Val Metric (Official-Style) | V2V-GoT Ref | Relative Delta |
+| --- | --- | ---: | ---: | ---: |
+| Q1 `notable_objects` | visible-object `heuristic` | F1@0.5m `0.585836` | `0.525000` | `+11.59%` |
+| Q2 `occluding_objects` | `risk_adaptive` + sparse-evidence fallback | F1@0.5m `0.427921` | `0.301000` | `+42.17%` |
+| Q3 `invisible_objects` | broad-pool `logreg_acceptor_t0p33` | F1@0.5m `0.493934` | `0.440000` | `+12.26%` |
+| Q4 `planning_awareness` | `relational_importance + trajectory_calibrated_acceptor` | F1@0.5m `0.613774` | `0.608000` | `+0.95%` |
+| Q8 `control_settings` | `q8_control_linear_classifier_v7_extended_ordinal_risk3` | normalized action error `0.076139` | `0.087600` | `-13.08%` error |
+| Q9 `future_trajectory` | `control_metadata_linear_tail_residual_v1` | L2 all `1.211582` | `2.620000` | `-53.76%` error |
+
+Notes:
+
+- Q1-Q4 headline metric is strict official-style `0.5m` localization F1.
+- Q8 normalization is `action_edit_dist / 8` because speed and steering class-index differences each range `0..4`.
+- Negative relative delta for Q8/Q9 means lower error than baseline (better).
+
 ## Latest Baseline Comparison
 
 This is the latest paper-facing validation comparison against the V2V-GoT reported task references, using strict official-style `0.5m` localization F1 as our headline metric.
@@ -671,6 +768,245 @@ Interpretation:
 - Q1-Q3 clear the V2V-GoT references by more than `10%` relative.
 - Q4 now exceeds the V2V-GoT reference under the strict `0.5m` headline metric; the margin is smaller, but it is supported by both train and held-out validation improvements after residual-attribution-guided calibration.
 - The strongest story is not one global model change. Each QA family uses the graph evidence differently: visible-object grounding for Q1, occlusion risk for Q2, broad hidden-object retrieval plus acceptance for Q3, and planning-relevance plus trajectory calibration for Q4.
+
+## Phase 9 Q9 Update (Week 6)
+
+Aim:
+
+- Expand beyond Q1-Q4 with a benchmark-faithful Q9 `future_trajectory` checkpoint.
+- Keep the same KG-based pipeline shape used by other tasks:
+  - prepare cooperative scene from V2V-GoT assets,
+  - route deterministically through the QA layer,
+  - export V2V-GoT-compatible `outputs`,
+  - score with the upstream-compatible official evaluator.
+
+Q9 approach (`ControlConditionedFutureTrajectoryPlanner`):
+
+- The planner is a modular Q9 component used by `FutureTrajectoryHandler`.
+- Input signals:
+  - current asker position from the question/scene context,
+  - control metadata (`suggested_speed_idx`, `suggested_steering_idx`, `dist`, `angle`),
+  - optional frozen model coefficients.
+- Prediction path:
+  - primary: frozen linear control-metadata model (`phase9_q9_control_metadata_linear_v1`) predicts absolute waypoint coordinates;
+  - improved: tail-residual variant (`phase9_q9_control_metadata_linear_tail_residual_v1`) adds a learned correction on late waypoints (tail) to reduce long-horizon drift;
+  - fallback: deterministic control-conditioned kinematic prior when no frozen model is supplied.
+- Design properties:
+  - train-frozen inference (no split-specific tuning at inference time),
+  - deterministic outputs for reproducibility,
+  - plug-and-play model JSON deployment through existing CLI flags.
+
+Q9 model formulation (paper-facing):
+
+- Task output:
+  - predict `6` future waypoints in ego-coordinate space:
+  - `[(x1,y1), (x2,y2), (x3,y3), (x4,y4), (x5,y5), (x6,y6)]`
+- Base predictor type:
+  - multivariate linear regression (not logistic regression)
+  - input feature vector `f` has `19` dimensions
+  - frozen coefficient matrix `W` has shape `12 x 19`
+  - output vector `o` is:
+    - `o = W f`
+    - `o = [x1, y1, x2, y2, x3, y3, x4, y4, x5, y5, x6, y6]`
+- Tail-residual variant:
+  - keeps the same base linear predictor for all six waypoints
+  - adds a second linear residual head only for waypoint tail `(x5,y5,x6,y6)`
+  - tail residual is predicted from an expanded nonlinear feature set and added to base tail outputs
+  - purpose: reduce long-horizon drift while preserving short-horizon behavior
+
+Feature vector construction:
+
+- Base feature vector (`19` dims):
+  - `1.0` (bias),
+  - `current_x`, `current_y`,
+  - `asker_is_cav1`,
+  - one-hot `speed_idx` (`5` dims),
+  - one-hot `steering_idx` (`5` dims),
+  - `dist`,
+  - `sin(angle)`, `cos(angle)`,
+  - `dist*sin(angle)`, `dist*cos(angle)`
+- Tail-residual extra features (in addition to base):
+  - `current_x*dist`, `current_y*dist`,
+  - `dist^2`,
+  - `sin(2*angle)`, `cos(2*angle)`,
+  - `dist^2*sin(angle)`, `dist^2*cos(angle)`,
+  - `speed_idx*steering_idx`
+
+Data sources for features:
+
+- `current_x`, `current_y`:
+  - parsed from question text: `I am CAV_X at (x,y)`
+- `asker_is_cav1`, `speed_idx`, `steering_idx`, `dist`, `angle`:
+  - from the Q9 benchmark record metadata
+- No future-reference coordinates are used as runtime features.
+
+One-sample walkthrough:
+
+- Input question:
+  - `I am CAV_1 at (-75.7,5.2). ... speed setting: fast ... steering setting: straight.`
+- Runtime steps:
+  - build `f` from current position and control metadata,
+  - compute `o = Wf` to get 12 values,
+  - reshape to 6 waypoints,
+  - if tail-residual model is enabled, add residual correction to `(x5,y5,x6,y6)`,
+  - emit final trajectory text for official export.
+
+How KG helps Q9:
+
+- The same cooperative scene preparation keeps coordinate frame, asker identity, and scene context consistent with Q1-Q4.
+- Deterministic graph-prepared routing avoids free-form generation variance and keeps export/eval behavior stable.
+- Q9 uses the same end-to-end benchmark path (`prepare -> route -> export -> official eval`) as the rest of the project, so comparisons are directly traceable.
+- The KG layer provides a stable structured interface (agent identity, pose context, routing contract, export contract), while the Q9 regressor provides the coordinate prediction head.
+
+Q9 evaluation protocol:
+
+- Generation: `scripts/run_phase8_qa_split_protocol.py --task-type future_trajectory`
+- Export: `scripts/export_phase8_predictions_to_v2vgot.py`
+- Official metrics: `scripts/run_v2vgot_official_qa_eval.py`
+- Reported metrics (lower is better): `l2_error_avg_1s`, `l2_error_avg_2s`, `l2_error_avg_3s`, `l2_error_avg_all`
+
+Baseline-relative performance (V2V-GoT Q9 ref `2.62m`):
+
+| Q9 Checkpoint | Train L2 all | Val L2 all | Val L2 @1s | Val L2 @2s | Val L2 @3s | V2V-GoT Ref L2 all | Relative Reduction vs Ref |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `control_metadata_linear_v1` | `0.894774` | `1.320964` | `0.950570` | `1.354670` | `1.657653` | `2.620000` | `49.58%` |
+| `control_metadata_linear_tail_residual_v1` | pending full official train rerun | `1.211582` | `0.950570` | `1.354670` | `1.329508` | `2.620000` | `53.76%` |
+
+Why it performs better than baseline:
+
+- Control-conditioned waypoint regression aligns the Q9 answer structure with the benchmark target format.
+- Train-frozen coefficients capture stable global trajectory patterns across control settings.
+- Tail residual correction improves long-horizon localization without degrading short-horizon behavior.
+- Net effect: substantial validation L2 reduction versus the V2V-GoT reference.
+
+Q9 artifacts:
+
+- linear model:
+  - `outputs/phase9_train_dev/q9_future_trajectory_control_metadata_linear_v1_deployable.json`
+- tail-residual model:
+  - `outputs/phase9_train_dev/q9_future_trajectory_control_metadata_linear_tail_residual_v1_deployable.json`
+- validation official summary (tail-residual):
+  - `outputs/phase8_val_report/official_eval_reports/val_q9_future_trajectory_control_linear_tail_residual_v1_official_export_manifest_official_qa_eval_summary.json`
+
+## Phase 9 Q8 Update (Week 6)
+
+Aim:
+
+- Promote a benchmark-faithful Q8 `control_settings` checkpoint with train-frozen inference and official-style evaluation.
+- Keep the method defensible and generalizable:
+  - structured KG-derived features,
+  - transparent linear/ordinal heads,
+  - no split-specific hardcoded scene rules.
+
+Q8 task and metric:
+
+- QA type: `18` (`control_settings`)
+- Official evaluator outputs:
+  - `speed_accuracy`, `steering_accuracy`, `action_accuracy`
+  - `speed_edit_dist`, `steering_edit_dist`, `action_edit_dist`
+- V2V-GoT Q8 reference in our protocol: action L1/error proxy `0.0876` (lower is better).
+
+Current promoted Q8 approach:
+
+- handler: `ControlSettingsHandler(selection_policy=linear_classifier)`
+- model family: train-frozen linear heads with ordinal speed decoding
+- selected model: `q8_control_linear_classifier_v7_extended_ordinal_risk3_deployable.json`
+- core design:
+  - KG-derived control candidate ranking remains deterministic and interpretable;
+  - speed uses ordinal thresholds (`fast -> ... -> stop`) rather than flat multiclass only;
+  - speed thresholding is risk-conditional (`low/mid/high` top-risk regimes);
+  - extended trajectory-aware features improve separation between benign far objects and path-relevant conflicts.
+
+Q8 feature design (selected checkpoint):
+
+- base graph features:
+  - top object risk/trajectory/asker distance, confidence, conflict, uncertainty, support/provenance, visibility/status, lateral offsets
+- extended trajectory-aware features (`extended_v1`):
+  - distance to first waypoint
+  - nearest waypoint index (normalized)
+  - along-path progress (normalized)
+  - local path curvature
+  - heading alignment (ego heading vs object bearing)
+
+Official-style Q8 results:
+
+| Split | Speed Acc | Steering Acc | Action Acc | Speed Edit Dist | Steering Edit Dist | Action Edit Dist | Normalized Action (`/8`) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Train | `0.655411` | `0.908950` | `0.607648` | `0.393165` | `0.123434` | `0.516599` | `0.064575` |
+| Val (promoted) | `0.684272` | `0.890308` | `0.620720` | `0.476204` | `0.132908` | `0.609112` | `0.076139` |
+
+Baseline comparison (val):
+
+- V2V-GoT Q8 reference: `0.087600`
+- current normalized action error: `0.076139`
+- absolute delta: `-0.011461` (lower is better)
+- relative error reduction: `13.08%`
+
+Why this works:
+
+- Residual analysis showed Q8 was speed-dominated, not steering-dominated.
+- Flat class tuning saturated; ordered speed modeling reduced large class-index jumps directly tied to edit distance.
+- Risk-conditional thresholding corrected context-dependent speed bias that one global threshold could not capture.
+- Extended trajectory/heading features improved the model's notion of whether a high-risk candidate is truly path-critical vs spatially distant noise.
+
+Why this is defensible for research:
+
+- The method is explicit and auditable: graph features -> frozen model -> deterministic export -> official evaluator.
+- Selection logic and model metadata are reproducible and versioned in deployable JSON files.
+- The improvement is not from prompt hacks or split-specific memorization; it is from structured feature and decoder design aligned to the official metric.
+- Legacy behavior remains intact (backward-compatible policy/model loading), and new behavior is opt-in via model metadata (`feature_set`, `speed_head_type`, threshold policy).
+
+Repro commands (selected Q8 checkpoint):
+
+```bash
+python3 scripts/train_phase9_q8_control_classifier.py \
+  --v2vgot-root /workspace/repos/V2V-GoT \
+  --split train \
+  --baseline-mode cooperative \
+  --feature-set extended_v1 \
+  --speed-head-type ordinal \
+  --speed-class-weighting sqrt_inverse_freq \
+  --steering-class-weighting none \
+  --l2-regularization 1e-4 \
+  --speed-ordinal-threshold-policy risk3 \
+  --speed-risk-split-low 0.2 \
+  --speed-risk-split-high 0.5 \
+  --output-json outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_deployable.json \
+  --output-report outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_report.json
+
+python3 scripts/run_phase8_qa_split_protocol.py \
+  --purpose train_dev \
+  --split train \
+  --task-type control_settings \
+  --scenario-name train_q8_control_linear_classifier_v7_extended_ordinal_risk3 \
+  --baseline-mode cooperative \
+  --control-selection-policy linear_classifier \
+  --control-model-json outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_deployable.json \
+  --workers 32 \
+  --v2vgot-root /workspace/repos/V2V-GoT
+
+python3 scripts/run_phase8_qa_split_protocol.py \
+  --purpose val_report \
+  --split val \
+  --task-type control_settings \
+  --scenario-name val_q8_control_linear_classifier_v7_extended_ordinal_risk3 \
+  --baseline-mode cooperative \
+  --control-selection-policy linear_classifier \
+  --control-model-json outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_deployable.json \
+  --workers 32 \
+  --v2vgot-root /workspace/repos/V2V-GoT
+```
+
+Key Q8 artifacts:
+
+- model:
+  - `outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_deployable.json`
+- train report:
+  - `outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_report.json`
+- validation official summary:
+  - `outputs/phase8_val_report/official_eval_reports/val_q8_control_linear_classifier_v7_extended_ordinal_risk3_official_export_manifest_official_qa_eval_summary.json`
+- mismatch analysis used to guide final design:
+  - `outputs/phase8_val_report/phase9_q8_control_v5_ordinal_mismatch_report.md`
 
 Q3 current finding:
 

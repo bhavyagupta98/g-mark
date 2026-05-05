@@ -95,10 +95,13 @@ def main() -> None:
     show_layout(v2vgot_root)
 
     print_section("5. Phase 2 demo")
-    run_command(["python3", "scripts/demo_phase2_scene_query.py"], cwd=REPO_ROOT)
+    run_command(["python3", "scripts/archive_legacy/phase1_4_demos/demo_phase2_scene_query.py"], cwd=REPO_ROOT)
 
     print_section("6. Phase 3 local validation")
-    run_command(["python3", "scripts/validate_phase3_local_graphs.py", "--max-frames", "5"], cwd=REPO_ROOT)
+    run_command(
+        ["python3", "scripts/archive_legacy/phase1_4_demos/validate_phase3_local_graphs.py", "--max-frames", "5"],
+        cwd=REPO_ROOT,
+    )
 
 
 if __name__ == "__main__":

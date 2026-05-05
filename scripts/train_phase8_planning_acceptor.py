@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--l1", type=float, default=0.0)
     parser.add_argument("--l2", type=float, default=0.001)
     parser.add_argument("--no-class-balance", action="store_true")
+    parser.add_argument("--log-every", type=int, default=0, help="Print epoch progress every N epochs; 0 disables.")
     parser.add_argument("--max-results", type=int, default=3)
     parser.add_argument("--near-duplicate-distance", type=float, default=2.0)
     parser.add_argument("--match-threshold", type=float, default=0.5)
@@ -174,11 +175,12 @@ def train_logreg(
     l1: float,
     l2: float,
     balance: bool,
+    log_every: int,
 ) -> dict[str, Any]:
     positive_weight, negative_weight = class_weights(y, balance)
     weights = [0.0 for _ in x[0]]
     bias = 0.0
-    for _ in range(epochs):
+    for epoch_index in range(epochs):
         grad_weights = [0.0 for _ in weights]
         grad_bias = 0.0
         for vector, label in zip(x, y):
@@ -200,6 +202,8 @@ def train_logreg(
             if regularization in {"l2", "elasticnet"} and l2 > 0.0:
                 penalty_gradient += l2 * weights[index]
             weights[index] -= learning_rate * (grad_weights[index] * scale + penalty_gradient)
+        if log_every > 0 and ((epoch_index + 1) % log_every == 0 or epoch_index + 1 == epochs):
+            print(f"training_progress: logreg_epoch={epoch_index + 1}/{epochs}")
     return {
         "model_type": "logreg",
         "bias": bias,
@@ -223,6 +227,7 @@ def train_mlp(
     seed: int,
     dev_fraction: float,
     patience: int,
+    log_every: int,
 ) -> dict[str, Any]:
     rng = random.Random(seed)
     train_indices, dev_indices = split_indices_by_sample(rows, dev_fraction=dev_fraction, seed=seed)
@@ -237,7 +242,7 @@ def train_mlp(
     best_state: tuple[list[list[float]], list[float], list[float], float] | None = None
     epochs_without_improvement = 0
 
-    for _epoch in range(epochs):
+    for epoch_index in range(epochs):
         grad_w1 = [[0.0 for _ in range(width)] for _ in range(hidden)]
         grad_b1 = [0.0 for _ in range(hidden)]
         grad_w2 = [0.0 for _ in range(hidden)]
@@ -292,6 +297,8 @@ def train_mlp(
                 epochs_without_improvement += 1
                 if epochs_without_improvement >= patience:
                     break
+        if log_every > 0 and ((epoch_index + 1) % log_every == 0 or epoch_index + 1 == epochs):
+            print(f"training_progress: mlp_epoch={epoch_index + 1}/{epochs}")
 
     if best_state is not None:
         w1, b1, w2, b2 = best_state
@@ -515,6 +522,7 @@ def main() -> None:
             seed=args.seed,
             dev_fraction=args.mlp_dev_fraction,
             patience=args.mlp_patience,
+            log_every=args.log_every,
         )
     else:
         model = train_logreg(
@@ -526,6 +534,7 @@ def main() -> None:
             l1=args.l1,
             l2=args.l2,
             balance=not args.no_class_balance,
+            log_every=args.log_every,
         )
     train_probabilities = predict(model, train_x)
     selected_train = choose_threshold(train_rows, train_probabilities, args)

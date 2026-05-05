@@ -22,12 +22,17 @@ from kg_coop_drive.application.planning_awareness import (
     build_planning_awareness_orchestrator,
 )
 from kg_coop_drive.application.v2vgotqa_router import (
+    ControlSettingsHandler,
+    FutureTrajectoryHandler,
     InvisibleObjectsHandler,
     InvisibleSelectionPolicy,
     NotableObjectsHandler,
     OccludingObjectsHandler,
     PlanningAwarenessHandler,
     V2VGoTQARouter,
+)
+from kg_coop_drive.application.future_trajectory_planner import (
+    ControlConditionedFutureTrajectoryPlanner,
 )
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType
 from kg_coop_drive.infrastructure.local_llm_client import (
@@ -93,6 +98,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--planning-acceptor-model-json",
         default="",
         help="Frozen Q4 planning-awareness acceptor model for acceptor-based planning policies.",
+    )
+    parser.add_argument(
+        "--future-trajectory-model-json",
+        default="",
+        help="Frozen Q9 future-trajectory control-delta model.",
+    )
+    parser.add_argument(
+        "--control-selection-policy",
+        default="rule",
+        choices=("rule", "linear_classifier"),
+        help="Q8 control-settings policy.",
+    )
+    parser.add_argument(
+        "--control-model-json",
+        default="",
+        help="Frozen Q8 control-settings model JSON.",
     )
     parser.add_argument(
         "--notable-ranker",
@@ -192,6 +213,24 @@ def load_planning_acceptor_model(path_value: str) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_future_trajectory_model(path_value: str) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_control_model(path_value: str) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def parse_task_types(raw_task_types: list[str]) -> tuple[BenchmarkTaskType, ...]:
     if not raw_task_types:
         return ()
@@ -210,6 +249,9 @@ def router_config_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "planning_selection_policy": args.planning_selection_policy,
         "planning_selection_source": args.planning_selection_source,
         "planning_acceptor_model": load_planning_acceptor_model(args.planning_acceptor_model_json),
+        "future_trajectory_model": load_future_trajectory_model(args.future_trajectory_model_json),
+        "control_selection_policy": args.control_selection_policy,
+        "control_model": load_control_model(args.control_model_json),
         "notable_ranker": args.notable_ranker,
         "occluding_ranker": args.occluding_ranker,
         "invisible_ranker": args.invisible_ranker,
@@ -253,6 +295,15 @@ def build_router(config: dict[str, Any], llm_client: LocalOpenAICompatibleLLMCli
             PlanningAwarenessHandler(
                 orchestrator=planning_orchestrator,
                 selection_source=str(config["planning_selection_source"]),
+            ),
+            FutureTrajectoryHandler(
+                planner=ControlConditionedFutureTrajectoryPlanner(
+                    model=dict(config["future_trajectory_model"])
+                ),
+            ),
+            ControlSettingsHandler(
+                selection_policy=str(config["control_selection_policy"]),
+                model=dict(config["control_model"]),
             ),
         )
     )
@@ -368,6 +419,9 @@ def main() -> None:
     print(f"planning_selection_policy: {args.planning_selection_policy}")
     print(f"planning_selection_source: {args.planning_selection_source}")
     print(f"planning_acceptor_model_json: {args.planning_acceptor_model_json}")
+    print(f"future_trajectory_model_json: {args.future_trajectory_model_json}")
+    print(f"control_selection_policy: {args.control_selection_policy}")
+    print(f"control_model_json: {args.control_model_json}")
     print(f"notable_ranker: {args.notable_ranker}")
     print(f"occluding_ranker: {args.occluding_ranker}")
     print(f"invisible_ranker: {args.invisible_ranker}")
@@ -426,6 +480,9 @@ def main() -> None:
                             "planning_selection_policy": args.planning_selection_policy,
                             "planning_selection_source": args.planning_selection_source,
                             "planning_acceptor_model_json": args.planning_acceptor_model_json,
+                            "future_trajectory_model_json": args.future_trajectory_model_json,
+                            "control_selection_policy": args.control_selection_policy,
+                            "control_model_json": args.control_model_json,
                             "notable_ranker": args.notable_ranker,
                             "occluding_ranker": args.occluding_ranker,
                             "invisible_ranker": args.invisible_ranker,

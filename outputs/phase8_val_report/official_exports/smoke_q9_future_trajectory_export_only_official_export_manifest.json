@@ -1,0 +1,18 @@
+{
+  "source_manifest": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/smoke_q9_future_trajectory_export_only_manifest.json",
+  "repository_root": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+  "split": "val",
+  "baseline_mode": "cooperative",
+  "scenario_name": "smoke_q9_future_trajectory_export_only",
+  "runs": [
+    {
+      "task_type": "future_trajectory",
+      "qa_type_id": 19,
+      "source_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/smoke_q9_future_trajectory_export_only.jsonl",
+      "output_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/official_exports/future_trajectory_smoke_q9_future_trajectory_export_only_official.jsonl",
+      "exported_count": 2,
+      "missing_samples": 0,
+      "missing_objects": 0
+    }
+  ]
+}

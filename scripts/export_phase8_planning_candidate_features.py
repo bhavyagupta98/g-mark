@@ -46,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--planning-ranker", default="relational_importance")
     parser.add_argument("--match-threshold", type=float, default=0.5)
     parser.add_argument("--limit", type=int, default=0, help="Use 0 for the full split.")
+    parser.add_argument("--progress-every", type=int, default=0)
     parser.add_argument("--output-jsonl", required=True)
     return parser
 
@@ -112,7 +113,7 @@ def main() -> None:
     candidate_rows = 0
     positive_rows = 0
     with output_path.open("w", encoding="utf-8") as handle:
-        for sample in samples:
+        for index, sample in enumerate(samples, start=1):
             prepared_scene = evaluator.prepare_sample(sample, baseline_mode=args.baseline_mode)
             prepared_sample = replace(sample, scene=prepared_scene)
             gt_coords = coordinates(reference_text(sample.raw_record))
@@ -153,6 +154,8 @@ def main() -> None:
                 candidate_rows += 1
                 if matched:
                     positive_rows += 1
+            if args.progress_every > 0 and (index % args.progress_every == 0 or index == len(samples)):
+                print(f"export_progress: {index}/{len(samples)} samples")
 
     print("=" * 72)
     print("Phase 8 Q4 Planning Candidate Feature Export")

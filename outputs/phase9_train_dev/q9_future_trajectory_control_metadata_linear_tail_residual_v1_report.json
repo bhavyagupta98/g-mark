@@ -1,0 +1,19 @@
+{
+  "train_rows": 12290,
+  "usable_rows": 12290,
+  "feature_count": 19,
+  "tail_feature_count": 27,
+  "tail_start_index": 4,
+  "train_metrics": {
+    "l2_error_avg_all": 1.0024926952190998,
+    "l2_error_avg_1s": 0.7054699136260023,
+    "l2_error_avg_3s": 1.0024926952190998,
+    "evaluated_rows": 12290.0
+  },
+  "base_train_metrics": {
+    "l2_error_avg_all": 1.0390471865677262,
+    "l2_error_avg_1s": 0.7054699136260023,
+    "l2_error_avg_3s": 1.0390471865677262,
+    "evaluated_rows": 12290.0
+  }
+}

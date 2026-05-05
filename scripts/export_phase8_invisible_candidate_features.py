@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import math
 import re
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -51,8 +53,46 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shortlist-size", type=int, default=12)
     parser.add_argument("--match-threshold", type=float, default=0.5)
     parser.add_argument("--limit", type=int, default=0, help="Use 0 for the full split.")
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--progress-every", type=int, default=0)
     parser.add_argument("--output-jsonl", required=True)
     return parser
+
+
+class _WorkerState:
+    def __init__(self, *, evaluator: V2VGoTQAPhase5AEvaluator, handler: InvisibleObjectsHandler, policy: InvisibleSelectionPolicy) -> None:
+        self.evaluator = evaluator
+        self.handler = handler
+        self.policy = policy
+
+
+_WORKER_STATE: dict[tuple[str, str, str, int, float, float], _WorkerState] = {}
+
+
+def _worker_state(config: dict[str, object]) -> _WorkerState:
+    key = (
+        str(config["v2vgot_root"]),
+        str(config["baseline_mode"]),
+        str(config["invisible_ranker"]),
+        int(config["shortlist_size"]),
+        float(config["min_risk"]),
+        float(config["min_relative_to_best"]),
+    )
+    state = _WORKER_STATE.get(key)
+    if state is not None:
+        return state
+    policy = InvisibleSelectionPolicy(
+        max_results=int(config["max_results"]),
+        shortlist_size=int(config["shortlist_size"]),
+        max_distance_to_trajectory=float(config["max_distance_to_trajectory"]),
+        min_risk=float(config["min_risk"]),
+        min_relative_to_best=float(config["min_relative_to_best"]),
+    )
+    handler = InvisibleObjectsHandler(ranker=str(config["invisible_ranker"]), selection_policy=policy)
+    evaluator = V2VGoTQAPhase5AEvaluator(str(config["v2vgot_root"]))
+    state = _WorkerState(evaluator=evaluator, handler=handler, policy=policy)
+    _WORKER_STATE[key] = state
+    return state
 
 
 def resolve_v2vgot_root(raw_value: str) -> Path:
@@ -142,6 +182,91 @@ def track_feature_payload(sample, handler: InvisibleObjectsHandler, track: Objec
     }
 
 
+def _sample_rows(sample, config: dict[str, object]) -> tuple[list[dict[str, object]], int, int]:
+    state = _worker_state(config)
+    prepared_scene = state.evaluator.prepare_sample(sample, baseline_mode=str(config["baseline_mode"]))
+    prepared_sample = replace(sample, scene=prepared_scene)
+    gt_coords = coordinates(reference_text(sample.raw_record))
+    answer = state.handler.answer(prepared_sample)
+    selected_ids = set(answer.object_ids)
+    ranked = state.handler._ranked_role_scores(  # noqa: SLF001
+        prepared_sample,
+        role="hidden_relevant",
+        max_results=int(config["shortlist_size"]),
+        min_distance_to_asker=state.policy.min_distance_to_asker,
+        max_distance_to_trajectory=state.policy.max_distance_to_trajectory,
+    )
+    ranked_by_id = {item.object_track.object_id: index + 1 for index, item in enumerate(ranked)}
+    candidate_coords = [
+        (item.object_track.position.x, item.object_track.position.y)
+        for item in ranked
+    ]
+    selected_coords = [
+        (item.object_track.position.x, item.object_track.position.y)
+        for item in ranked
+        if item.object_track.object_id in selected_ids
+    ]
+
+    rows: list[dict[str, object]] = []
+    candidate_rows = 0
+    unmatched_gt_rows = 0
+    for rank, item in enumerate(ranked, start=1):
+        track = item.object_track
+        coord = (track.position.x, track.position.y)
+        nearest_gt = nearest_coord_distance(coord, gt_coords)
+        row = {
+            "row_type": "candidate",
+            "sample_id": sample.sample_id,
+            "split": str(config["split"]),
+            "rank": rank,
+            "ranker": str(config["invisible_ranker"]),
+            "selected_by_policy": track.object_id in selected_ids,
+            "gt_positive_row": bool(gt_coords),
+            "gt_count": len(gt_coords),
+            "candidate_matches_gt": nearest_gt is not None and nearest_gt <= float(config["match_threshold"]),
+            "nearest_gt_distance": None if nearest_gt is None else round(nearest_gt, 6),
+            "role_score": round(float(item.score), 6),
+            "visibility_state": item.visibility_state.value if item.visibility_state is not None else None,
+            **track_feature_payload(prepared_sample, state.handler, track),
+        }
+        rows.append(row)
+        candidate_rows += 1
+
+    for gt_index, gt_coord in enumerate(gt_coords):
+        selected_match_distance = nearest_coord_distance(gt_coord, selected_coords)
+        if selected_match_distance is not None and selected_match_distance <= float(config["match_threshold"]):
+            continue
+        nearest_candidate_distance = nearest_coord_distance(gt_coord, candidate_coords)
+        nearest_track, nearest_track_distance = nearest_track_to_coord(gt_coord, prepared_scene.object_tracks)
+        row = {
+            "row_type": "unmatched_gt",
+            "sample_id": sample.sample_id,
+            "split": str(config["split"]),
+            "gt_index": gt_index,
+            "gt_x": round(float(gt_coord[0]), 6),
+            "gt_y": round(float(gt_coord[1]), 6),
+            "ranker": str(config["invisible_ranker"]),
+            "gt_count": len(gt_coords),
+            "nearest_candidate_distance": (
+                None if nearest_candidate_distance is None else round(nearest_candidate_distance, 6)
+            ),
+            "nearest_track_distance": None if nearest_track_distance is None else round(nearest_track_distance, 6),
+            "nearest_track_rank": (
+                None if nearest_track is None else ranked_by_id.get(nearest_track.object_id)
+            ),
+        }
+        if nearest_track is not None:
+            row.update(
+                {
+                    f"nearest_track_{key}": value
+                    for key, value in track_feature_payload(prepared_sample, state.handler, nearest_track).items()
+                }
+            )
+        rows.append(row)
+        unmatched_gt_rows += 1
+    return rows, candidate_rows, unmatched_gt_rows
+
+
 def main() -> None:
     args = build_parser().parse_args()
     v2vgot_root = resolve_v2vgot_root(args.v2vgot_root)
@@ -150,16 +275,7 @@ def main() -> None:
         output_path = (REPO_ROOT / output_path).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    policy = InvisibleSelectionPolicy(
-        max_results=args.invisible_max_results,
-        shortlist_size=args.shortlist_size,
-        max_distance_to_trajectory=args.invisible_max_distance_to_trajectory,
-        min_risk=args.invisible_min_risk,
-        min_relative_to_best=args.invisible_min_relative_to_best,
-    )
-    handler = InvisibleObjectsHandler(ranker=args.invisible_ranker, selection_policy=policy)
     adapter = V2VGoTQABenchmarkAdapter(str(v2vgot_root))
-    evaluator = V2VGoTQAPhase5AEvaluator(str(v2vgot_root))
     samples = tuple(
         sample
         for sample in adapter.load_samples(split_name=args.split, file_name=args.file_name)
@@ -168,87 +284,47 @@ def main() -> None:
     if args.limit > 0:
         samples = samples[: args.limit]
 
+    worker_config: dict[str, object] = {
+        "v2vgot_root": str(v2vgot_root),
+        "split": args.split,
+        "baseline_mode": args.baseline_mode,
+        "invisible_ranker": args.invisible_ranker,
+        "max_results": args.invisible_max_results,
+        "shortlist_size": args.shortlist_size,
+        "max_distance_to_trajectory": args.invisible_max_distance_to_trajectory,
+        "min_risk": args.invisible_min_risk,
+        "min_relative_to_best": args.invisible_min_relative_to_best,
+        "match_threshold": args.match_threshold,
+    }
+
     candidate_rows = 0
     unmatched_gt_rows = 0
     with output_path.open("w", encoding="utf-8") as handle:
-        for sample in samples:
-            prepared_scene = evaluator.prepare_sample(sample, baseline_mode=args.baseline_mode)
-            prepared_sample = replace(sample, scene=prepared_scene)
-            gt_coords = coordinates(reference_text(sample.raw_record))
-            answer = handler.answer(prepared_sample)
-            selected_ids = set(answer.object_ids)
-            ranked = handler._ranked_role_scores(  # noqa: SLF001
-                prepared_sample,
-                role="hidden_relevant",
-                max_results=args.shortlist_size,
-                min_distance_to_asker=policy.min_distance_to_asker,
-                max_distance_to_trajectory=policy.max_distance_to_trajectory,
-            )
-            ranked_by_id = {item.object_track.object_id: index + 1 for index, item in enumerate(ranked)}
-            candidate_coords = [
-                (item.object_track.position.x, item.object_track.position.y)
-                for item in ranked
-            ]
-            selected_coords = [
-                (item.object_track.position.x, item.object_track.position.y)
-                for item in ranked
-                if item.object_track.object_id in selected_ids
-            ]
-
-            for rank, item in enumerate(ranked, start=1):
-                track = item.object_track
-                coord = (track.position.x, track.position.y)
-                nearest_gt = nearest_coord_distance(coord, gt_coords)
-                row = {
-                    "row_type": "candidate",
-                    "sample_id": sample.sample_id,
-                    "split": args.split,
-                    "rank": rank,
-                    "ranker": args.invisible_ranker,
-                    "selected_by_policy": track.object_id in selected_ids,
-                    "gt_positive_row": bool(gt_coords),
-                    "gt_count": len(gt_coords),
-                    "candidate_matches_gt": nearest_gt is not None and nearest_gt <= args.match_threshold,
-                    "nearest_gt_distance": None if nearest_gt is None else round(nearest_gt, 6),
-                    "role_score": round(float(item.score), 6),
-                    "visibility_state": item.visibility_state.value if item.visibility_state is not None else None,
-                    **track_feature_payload(prepared_sample, handler, track),
-                }
-                handle.write(json.dumps(row) + "\n")
-                candidate_rows += 1
-
-            for gt_index, gt_coord in enumerate(gt_coords):
-                selected_match_distance = nearest_coord_distance(gt_coord, selected_coords)
-                if selected_match_distance is not None and selected_match_distance <= args.match_threshold:
-                    continue
-                nearest_candidate_distance = nearest_coord_distance(gt_coord, candidate_coords)
-                nearest_track, nearest_track_distance = nearest_track_to_coord(gt_coord, prepared_scene.object_tracks)
-                row = {
-                    "row_type": "unmatched_gt",
-                    "sample_id": sample.sample_id,
-                    "split": args.split,
-                    "gt_index": gt_index,
-                    "gt_x": round(float(gt_coord[0]), 6),
-                    "gt_y": round(float(gt_coord[1]), 6),
-                    "ranker": args.invisible_ranker,
-                    "gt_count": len(gt_coords),
-                    "nearest_candidate_distance": (
-                        None if nearest_candidate_distance is None else round(nearest_candidate_distance, 6)
-                    ),
-                    "nearest_track_distance": None if nearest_track_distance is None else round(nearest_track_distance, 6),
-                    "nearest_track_rank": (
-                        None if nearest_track is None else ranked_by_id.get(nearest_track.object_id)
-                    ),
-                }
-                if nearest_track is not None:
-                    row.update(
-                        {
-                            f"nearest_track_{key}": value
-                            for key, value in track_feature_payload(prepared_sample, handler, nearest_track).items()
-                        }
-                    )
-                handle.write(json.dumps(row) + "\n")
-                unmatched_gt_rows += 1
+        if args.workers > 1:
+            chunksize = max(1, len(samples) // max(args.workers * 8, 1))
+            with ProcessPoolExecutor(max_workers=args.workers) as executor:
+                iterator = executor.map(
+                    _sample_rows,
+                    samples,
+                    itertools.repeat(worker_config),
+                    chunksize=chunksize,
+                )
+                for index, (rows, sample_candidate_rows, sample_unmatched_gt_rows) in enumerate(iterator, start=1):
+                    for row in rows:
+                        handle.write(json.dumps(row) + "\n")
+                    candidate_rows += sample_candidate_rows
+                    unmatched_gt_rows += sample_unmatched_gt_rows
+                    if args.progress_every > 0 and (index % args.progress_every == 0 or index == len(samples)):
+                        print(f"export_progress: {index}/{len(samples)} samples")
+        else:
+            for index, sample in enumerate(samples, start=1):
+                rows, sample_candidate_rows, sample_unmatched_gt_rows = _sample_rows(sample, worker_config)
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+                candidate_rows += sample_candidate_rows
+                unmatched_gt_rows += sample_unmatched_gt_rows
+                if args.progress_every > 0 and (index % args.progress_every == 0 or index == len(samples)):
+                    print(f"export_progress: {index}/{len(samples)} samples")
 
     print("=" * 72)
     print("Phase 8 Invisible Candidate Feature Export")
@@ -256,6 +332,7 @@ def main() -> None:
     print(f"v2vgot_root: {v2vgot_root}")
     print(f"split: {args.split}")
     print(f"ranker: {args.invisible_ranker}")
+    print(f"workers: {args.workers}")
     print(f"samples: {len(samples)}")
     print(f"candidate_rows: {candidate_rows}")
     print(f"unmatched_gt_rows: {unmatched_gt_rows}")

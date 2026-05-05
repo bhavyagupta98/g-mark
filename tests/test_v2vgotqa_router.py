@@ -1562,7 +1562,8 @@ def test_v2vgotqa_router_answers_future_trajectory() -> None:
     assert answer.supported is True
     assert answer.object_ids == ()
     assert answer.answer_text == (
-        "Suggested future trajectory: [(10.0, 0.0), (20.0, 0.0), (30.0, 0.0)]."
+        "The suggested future trajectory is [(5.8, 0.1), (11.6, 0.2), "
+        "(17.4, 0.3), (23.2, 0.5), (29.0, 0.6), (34.8, 0.7)]."
     )
 
 
@@ -1574,18 +1575,19 @@ def test_v2vgotqa_router_answers_control_settings() -> None:
     assert answer.supported is True
     assert answer.object_ids == ("occluded-car", "visible-car")
     assert answer.answer_text == (
-        "Suggested control settings: speed=reduce speed sharply; steering=steer left; key objects: occluded-car, visible-car."
+        "The suggested speed setting is: very slow. The suggested steering setting is: slightly left. Key objects: occluded-car, visible-car."
     )
 
 
-def test_future_trajectory_handler_renders_points_directly() -> None:
+def test_future_trajectory_handler_uses_control_prior_not_scene_answer() -> None:
     handler = FutureTrajectoryHandler()
 
     answer = handler.answer(_sample(BenchmarkTaskType.FUTURE_TRAJECTORY))
 
     assert answer.supported is True
     assert answer.object_ids == ()
-    assert answer.answer_text.endswith("[(10.0, 0.0), (20.0, 0.0), (30.0, 0.0)].")
+    assert "(10.0, 0.0), (20.0, 0.0), (30.0, 0.0)" not in answer.answer_text
+    assert answer.answer_text.startswith("The suggested future trajectory is [")
 
 
 def test_control_settings_handler_renders_speed_and_steering() -> None:
@@ -1595,8 +1597,8 @@ def test_control_settings_handler_renders_speed_and_steering() -> None:
 
     assert answer.supported is True
     assert answer.object_ids == ("occluded-car", "visible-car")
-    assert "speed=reduce speed sharply" in answer.answer_text
-    assert "steering=steer left" in answer.answer_text
+    assert "suggested speed setting is: very slow" in answer.answer_text.lower()
+    assert "suggested steering setting is: slightly left" in answer.answer_text.lower()
 
 
 def test_object_motion_prediction_handler_projects_object_velocity() -> None:
