@@ -94,12 +94,12 @@ def main() -> None:
     print_section("4. no_fusion_keep_all folder layout")
     show_layout(v2vgot_root)
 
-    print_section("5. Phase 2 demo")
-    run_command(["python3", "scripts/archive_legacy/phase1_4_demos/demo_phase2_scene_query.py"], cwd=REPO_ROOT)
+    print_section("5. Scene query demo")
+    run_command(["python3", "scripts/demo_scene_query.py"], cwd=REPO_ROOT)
 
-    print_section("6. Phase 3 local validation")
+    print_section("6. Local graph validation")
     run_command(
-        ["python3", "scripts/archive_legacy/phase1_4_demos/validate_phase3_local_graphs.py", "--max-frames", "5"],
+        ["python3", "scripts/validate_local_graphs.py", "--max-frames", "5"],
         cwd=REPO_ROOT,
     )
 

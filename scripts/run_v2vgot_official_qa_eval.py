@@ -159,7 +159,7 @@ PLANNING_METRIC_PATTERN = re.compile(r"^(precision|recall|f1):\s+([0-9.eE+-]+)$"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the V2V-GoT/LLaVA simplified Q1-Q9 official evaluator on Phase 8/9 "
+            "Run the V2V-GoT/LLaVA simplified Q1-Q9 official evaluator on "
             "official-style export files, using a persistent QA-only evaluator copy."
         )
     )
@@ -417,8 +417,16 @@ def run_one(
 
 
 def write_markdown(summary: dict[str, object], markdown_path: Path) -> None:
+    runs = summary.get("runs", [])
+    task_scope = ",".join(
+        sorted(
+            str(run.get("task_type"))
+            for run in runs
+            if isinstance(run, dict) and run.get("task_type") is not None
+        )
+    ) or "none"
     lines = [
-        "# Phase 8 Official QA Evaluation",
+        f"# Official QA Evaluation (`task_scope={task_scope}`)",
         "",
         f"- `export_manifest`: `{summary['export_manifest']}`",
         f"- `v2vgot_root`: `{summary['v2vgot_root']}`",
@@ -501,9 +509,11 @@ def main() -> int:
     json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     write_markdown(summary, markdown_path)
 
+    task_scope = ",".join(sorted(str(result["task_type"]) for result in results)) if results else "none"
     print("=" * 72)
-    print("Phase 8 Official QA Evaluation")
+    print("Official QA Evaluation")
     print("=" * 72)
+    print(f"task_scope: {task_scope}")
     print(f"export_manifest: {export_manifest_path}")
     print(f"v2vgot_root: {v2vgot_root}")
     print(f"evaluator_path: {evaluator_path}")

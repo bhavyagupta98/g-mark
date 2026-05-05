@@ -79,14 +79,14 @@ The first Phase 9 code change extends existing components rather than adding a s
 
 Files:
 
-- `scripts/run_phase8_qa_split_protocol.py`
+- `scripts/run_qa_split_pipeline.py`
   - now accepts deferred task types: `object_motion_prediction`, `agent_motion_prediction`, `control_settings`, `future_trajectory`
   - passes `--num-future-waypoints 6` to official evaluation for deferred tasks
-- `scripts/export_phase8_predictions_to_v2vgot.py`
+- `scripts/export_qa_predictions.py`
   - maps Q5/Q6/Q8/Q9 task types to official QA IDs
   - keeps Q1-Q4 object-coordinate rendering unchanged
   - passes handler `answer_text` through for deferred tasks
-- `scripts/run_v2vgot_official_qa_eval.py`
+- `scripts/evaluate_official_qa.py`
   - recognizes QA IDs `15`, `16`, `17`, `18`, and `19`
   - parses deferred metrics such as future-trajectory L2 and control/action accuracy
 
@@ -136,7 +136,7 @@ Expected artifacts:
 
 Implementation smoke status:
 
-- Q9 prediction generation works through `scripts/evaluate_v2vgotqa_phase5a.py`.
+- Q9 prediction generation works through `scripts/evaluate_qa_router.py`.
 - Q9 official-style export works and produces `qa_type_id=19` records.
 - Initial local official evaluation exposed two evaluator-wrapper issues:
   - Q9 calls `project_points_by_matrix_torch`, which can be unavailable when optional V2V4Real dependencies such as `shapely` are not installed;
@@ -213,7 +213,7 @@ python3 scripts/run_qa_split_pipeline.py \
   --progress-every 250 \
   --v2vgot-root /workspace/repos/V2V-GoT
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose train_dev \
   --split train \
   --task-type agent_motion_prediction \
@@ -223,7 +223,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
   --progress-every 250 \
   --v2vgot-root /workspace/repos/V2V-GoT
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type agent_motion_prediction \

@@ -17,6 +17,13 @@ Primary reference document:
 
 - `docs/project_status_summary.md`
 
+Canonical pipeline commands (current):
+
+- split pipeline: `scripts/run_qa_split_pipeline.py`
+- router evaluation: `scripts/evaluate_qa_router.py`
+- official export: `scripts/export_qa_predictions.py`
+- official QA eval: `scripts/evaluate_official_qa.py`
+
 Phase 8 archival reference:
 
 - `docs/phase8_scored_evaluation_and_baseline_archival.md`
@@ -116,7 +123,7 @@ python3 scripts/run_qa_split_pipeline.py \
 Current lower-level fallback command before protocol extension:
 
 ```bash
-python3 scripts/evaluate_v2vgotqa_phase5a.py \
+python3 scripts/evaluate_qa_router.py \
   --split val \
   --limit 0 \
   --task-type future_trajectory \
@@ -218,7 +225,7 @@ Why it worked:
 Train/freeze + official evaluation commands (promoted):
 
 ```bash
-python3 scripts/train_phase9_q8_control_classifier.py \
+python3 scripts/train_q8_control_policy.py \
   --v2vgot-root /workspace/repos/V2V-GoT \
   --split train \
   --baseline-mode cooperative \
@@ -298,7 +305,7 @@ python3 scripts/run_qa_split_pipeline.py \
   --progress-every 250 \
   --v2vgot-root /workspace/repos/V2V-GoT
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type object_motion_prediction \
@@ -308,7 +315,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
   --progress-every 250 \
   --v2vgot-root /workspace/repos/V2V-GoT
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose train_dev \
   --split train \
   --task-type agent_motion_prediction \
@@ -318,7 +325,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
   --progress-every 250 \
   --v2vgot-root /workspace/repos/V2V-GoT
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type agent_motion_prediction \
@@ -367,7 +374,7 @@ Motivation:
 Current official-style Q3 cooperative command:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type invisible_objects \
@@ -387,7 +394,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
 Current official-style Q3 ego-only command:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type invisible_objects \
@@ -407,7 +414,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
 Current official-style Q4 cooperative command:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type planning_awareness \
@@ -426,7 +433,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
 Current official-style Q4 ego-only command:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type planning_awareness \

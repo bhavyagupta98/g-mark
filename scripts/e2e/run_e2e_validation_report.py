@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 Q_BASELINES = {
     "q1_notable_objects": 0.5250,
     "q2_occluding_objects": 0.3010,
+    "q5_object_motion_prediction": 8.0500,
     "q3_invisible_objects": 0.4400,
     "q4_planning_awareness": 0.6080,
     "q8_control_settings": 0.0876,
@@ -36,7 +37,7 @@ class TaskRunConfig:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run val-split official QA evaluations for frozen Q1/Q2/Q3/Q4/Q8/Q9 "
+            "Run val-split official QA evaluations for frozen Q1/Q2/Q3/Q4/Q5/Q8/Q9 "
             "and print report-ready baseline comparison tables."
         )
     )
@@ -126,6 +127,12 @@ def build_val_task_configs(model_paths: dict[str, str]) -> tuple[TaskRunConfig, 
             metric_label="F1@0.5m",
             higher_is_better=True,
             extra_args=("--occluding-ranker", "risk_adaptive"),
+        ),
+        TaskRunConfig(
+            name="q5_object_motion_prediction",
+            task_type="object_motion_prediction",
+            metric_label="L2 Avg All (m)",
+            higher_is_better=False,
         ),
         TaskRunConfig(
             name="q3_invisible_objects",
@@ -219,10 +226,10 @@ def extract_primary_metric(task_name: str, summary_payload: dict[str, object]) -
             raise ValueError("Missing action_edit_dist for Q8")
         return float(action_edit_dist) / 8.0
 
-    if task_name == "q9_future_trajectory":
+    if task_name in {"q5_object_motion_prediction", "q9_future_trajectory"}:
         l2_all = metrics.get("l2_error_avg_all")
         if not isinstance(l2_all, (float, int)):
-            raise ValueError("Missing l2_error_avg_all for Q9")
+            raise ValueError(f"Missing l2_error_avg_all for {task_name}")
         return float(l2_all)
 
     raise ValueError(f"Unknown task metric extraction: {task_name}")
@@ -264,7 +271,7 @@ def main() -> int:
     archive_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 72)
-    print("Phase 9 E2E Validation Report")
+    print("E2E Validation Report")
     print("=" * 72)
     print(f"manifest: {manifest_path}")
     print(f"run_name: {run_name}")

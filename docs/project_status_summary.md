@@ -473,11 +473,11 @@ QA layer:
 
 End-to-end script path:
 
-1. `scripts/run_phase8_qa_split_protocol.py` runs deterministic KG-based QA prediction.
-2. `scripts/evaluate_v2vgotqa_phase5a.py` loads V2V-GoT-QA rows and prepares cooperative scenes.
+1. `scripts/run_qa_split_pipeline.py` runs deterministic KG-based QA prediction.
+2. `scripts/evaluate_qa_router.py` loads V2V-GoT-QA rows and prepares cooperative scenes.
 3. `V2VGoTQARouter` dispatches to the task handler.
 4. The handler selects object IDs from the cooperative scene graph.
-5. `scripts/export_phase8_predictions_to_v2vgot.py` converts predictions into V2V-GoT/LLaVA-style JSONL with an `outputs` field.
+5. `scripts/export_qa_predictions.py` converts predictions into V2V-GoT/LLaVA-style JSONL with an `outputs` field.
 6. `scripts/run_v2vgot_official_qa_eval.py` runs the upstream-compatible official-style Q1-Q4 evaluator.
 
 Metric:
@@ -656,7 +656,7 @@ python3 scripts/run_phase5_closeout.py \
 Executable commands for current official-style ego/cooperative ablations:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type invisible_objects \
@@ -672,7 +672,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
   --progress-every 250 \
   --workers 32
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type invisible_objects \
@@ -688,7 +688,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
   --progress-every 250 \
   --workers 32
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type planning_awareness \
@@ -703,7 +703,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
   --progress-every 250 \
   --workers 32
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type planning_awareness \
@@ -860,8 +860,8 @@ How KG helps Q9:
 
 Q9 evaluation protocol:
 
-- Generation: `scripts/run_phase8_qa_split_protocol.py --task-type future_trajectory`
-- Export: `scripts/export_phase8_predictions_to_v2vgot.py`
+- Generation: `scripts/run_qa_split_pipeline.py --task-type future_trajectory`
+- Export: `scripts/export_qa_predictions.py`
 - Official metrics: `scripts/run_v2vgot_official_qa_eval.py`
 - Reported metrics (lower is better): `l2_error_avg_1s`, `l2_error_avg_2s`, `l2_error_avg_3s`, `l2_error_avg_all`
 
@@ -959,7 +959,7 @@ Why this is defensible for research:
 Repro commands (selected Q8 checkpoint):
 
 ```bash
-python3 scripts/train_phase9_q8_control_classifier.py \
+python3 scripts/train_q8_control_policy.py \
   --v2vgot-root /workspace/repos/V2V-GoT \
   --split train \
   --baseline-mode cooperative \
@@ -974,7 +974,7 @@ python3 scripts/train_phase9_q8_control_classifier.py \
   --output-json outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_deployable.json \
   --output-report outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_report.json
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose train_dev \
   --split train \
   --task-type control_settings \
@@ -985,7 +985,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
   --workers 32 \
   --v2vgot-root /workspace/repos/V2V-GoT
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type control_settings \
@@ -1057,7 +1057,7 @@ Q4 adaptive acceptor next step:
 
 - implemented train-frozen logistic acceptor path:
   - export train features with `scripts/export_phase8_planning_candidate_features.py`
-  - train/freeze model with `scripts/train_phase8_planning_acceptor.py`
+  - train/freeze model with `scripts/train_q4_planning_acceptor.py`
   - run normal evaluation with `--planning-selection-policy logreg_acceptor`
   - provide frozen JSON via `--planning-acceptor-model-json`
 - training uses train split only; validation is used only after the model and threshold are frozen.
@@ -1101,7 +1101,7 @@ python3 scripts/inspect_phase8_planning_official_mismatches.py \
   - candidate direction: add adaptive count gating or non-linear interaction modeling on top of candidate acceptance, rather than more L1/L2 penalty tuning.
 - non-linear Q4 acceptor implementation:
   - added a pluggable `mlp_acceptor` planning-selection policy alongside the existing `logreg_acceptor`
-  - `scripts/train_phase8_planning_acceptor.py` now supports `--model-type mlp` and writes the same deployable JSON shape with normalization, threshold, max-results, and train-selected metrics
+  - `scripts/train_q4_planning_acceptor.py` now supports `--model-type mlp` and writes the same deployable JSON shape with normalization, threshold, max-results, and train-selected metrics
   - runtime evaluation still uses the standard Q4 orchestrator path with `--planning-selection-policy mlp_acceptor --planning-acceptor-model-json <model>`
   - the existing promoted `logreg_acceptor` checkpoint and all earlier policies remain unchanged.
 - first MLP candidate `q4_planning_rel_mlp_h16_p060`:
@@ -1164,7 +1164,7 @@ python3 scripts/inspect_phase8_planning_official_mismatches.py \
   - added `trajectory_calibrated_acceptor` as a separate policy wrapping the frozen acceptor
   - suppresses moderate-probability far/lateral candidates using trajectory distance and lateral offset
   - rescues near-path, near-threshold candidates using probability, rank, and trajectory distance
-  - added `scripts/configure_phase8_planning_trajectory_calibration.py` to copy a deployable model and attach reproducible calibration knobs
+  - added `scripts/configure_q4_trajectory_calibration.py` to copy a deployable model and attach reproducible calibration knobs
   - intended target: reduce high-probability far/lateral false positives while recovering near-threshold false negatives.
 - trajectory-calibrated `v1` official validation result:
   - model: `outputs/phase8_train_dev/q4_policy_optimization/q4_planning_rel_logreg_nd1p0_trajcal_v1_deployable.json`
@@ -1186,7 +1186,7 @@ python3 scripts/export_phase8_planning_candidate_features.py \
   --planning-ranker relational_importance \
   --output-jsonl outputs/phase8_train_dev/q4_policy_optimization/q4_train_relational_candidate_features.jsonl
 
-python3 scripts/train_phase8_planning_acceptor.py \
+python3 scripts/train_q4_planning_acceptor.py \
   --train-features-jsonl outputs/phase8_train_dev/q4_policy_optimization/q4_train_relational_candidate_features.jsonl \
   --output-dir outputs/phase8_train_dev/q4_policy_optimization \
   --run-name q4_planning_rel_logreg_acceptor \
@@ -1196,7 +1196,7 @@ python3 scripts/train_phase8_planning_acceptor.py \
 Frozen-model train/validation evaluation:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose train_dev \
   --split train \
   --task-type planning_awareness \
@@ -1210,7 +1210,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
   --progress-every 250 \
   --workers 32
 
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type planning_awareness \
@@ -1255,7 +1255,7 @@ Artifacts:
 Reproduce validation:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type notable_objects \
@@ -1296,7 +1296,7 @@ Artifacts:
 Reproduce validation:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type occluding_objects \
@@ -1346,7 +1346,7 @@ Artifacts:
 Reproduce train:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose train_dev \
   --split train \
   --task-type invisible_objects \
@@ -1365,7 +1365,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
 Reproduce validation:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type invisible_objects \
@@ -1437,7 +1437,7 @@ Artifacts:
 Reproduce train:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose train_dev \
   --split train \
   --task-type planning_awareness \
@@ -1455,7 +1455,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
 Reproduce validation:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type planning_awareness \
@@ -1493,7 +1493,7 @@ Use the same task, same split, and same selector settings, changing only `--base
 Example cooperative Q3 validation:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type invisible_objects \
@@ -1513,7 +1513,7 @@ python3 scripts/run_phase8_qa_split_protocol.py \
 Example ego-only Q3 validation:
 
 ```bash
-python3 scripts/run_phase8_qa_split_protocol.py \
+python3 scripts/run_qa_split_pipeline.py \
   --purpose val_report \
   --split val \
   --task-type invisible_objects \

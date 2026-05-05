@@ -25,7 +25,7 @@ class TaskRunConfig:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run end-to-end train pipeline for frozen Q1/Q2/Q3/Q4/Q8/Q9 setup: "
+            "Run end-to-end train pipeline for frozen Q1/Q2/Q3/Q4/Q5/Q8/Q9 setup: "
             "feature export, model training, train-split QA evaluation, and artifact archival."
         )
     )
@@ -175,7 +175,7 @@ def train_models(
     q3_policy_run_name = "q3_invisible_policy_e2e"
     q3_opt_command = [
         sys.executable,
-        "scripts/archive_legacy/phase8_experiments/optimize_phase8_invisible_candidate_policy.py",
+        "scripts/optimize_q3_invisible_candidate_policy.py",
         "--train-features-jsonl",
         str(q3_train_features),
         "--output-dir",
@@ -223,17 +223,29 @@ def train_models(
     q3_opt_report = read_json(q3_policy_dir / f"{q3_policy_run_name}_report.json")
     deployable_map = q3_opt_report.get("deployable_model_paths")
     q3_selected_model_path: Path | None = None
+    q3_selected_result_key = ""
+    q3_available_result_keys: list[str] = []
+    q3_near_miss_keys: list[str] = []
     if isinstance(deployable_map, dict):
-        preferred_key = "logreg:max_recall_p0p5:"
+        q3_available_result_keys = sorted(str(key) for key in deployable_map.keys())
         for result_key, model_path in deployable_map.items():
-            if isinstance(result_key, str) and result_key.startswith(preferred_key) and isinstance(model_path, str):
+            if not isinstance(result_key, str) or not isinstance(model_path, str):
+                continue
+            key_parts = result_key.split(":")
+            if len(key_parts) < 3:
+                continue
+            model_name, policy_name = key_parts[0], key_parts[1]
+            if model_name == "logreg" and policy_name == "max_recall_p0p5":
                 q3_selected_model_path = Path(model_path).expanduser()
+                q3_selected_result_key = result_key
                 break
+            if model_name == "logreg" and policy_name.startswith("max_recall_p0p5"):
+                q3_near_miss_keys.append(result_key)
     if q3_selected_model_path is None:
-        available = sorted(str(key) for key in deployable_map.keys()) if isinstance(deployable_map, dict) else []
         raise RuntimeError(
-            "Unable to locate required Q3 deployable model for policy prefix "
-            f"'logreg:max_recall_p0p5'. Available keys: {available}"
+            "Unable to locate required Q3 deployable model for exact policy token "
+            "'logreg:max_recall_p0p5'. "
+            f"available_keys={q3_available_result_keys}, near_miss_keys={q3_near_miss_keys}"
         )
     q3_model = models_dir / "q3_invisible_logreg_acceptor_deployable.json"
     if not q3_selected_model_path.is_absolute():
@@ -246,9 +258,27 @@ def train_models(
             "Q3 selected deployable model does not match required policy family "
             f"'max_recall_p0p5'. Found selected_policy='{selected_policy}'."
         )
+    q3_audit_path = models_dir / "q3_policy_selection_audit.json"
+    write_json(
+        q3_audit_path,
+        {
+            "required_result_key_policy_token": "logreg:max_recall_p0p5",
+            "required_selected_policy": "max_recall_p0p5",
+            "selected_result_key": q3_selected_result_key,
+            "selected_model_path": str(q3_selected_model_path),
+            "copied_model_path": str(q3_model),
+            "selected_policy": selected_policy,
+            "available_result_keys": q3_available_result_keys,
+            "near_miss_keys": q3_near_miss_keys,
+        },
+    )
+    if q3_near_miss_keys:
+        print(f"ignored_q3_near_miss_keys: {sorted(q3_near_miss_keys)}")
+    print(f"selected_q3_result_key: {q3_selected_result_key}")
     print(f"selected_q3_model: {q3_selected_model_path}")
     print(f"copied_q3_model: {q3_model}")
     print(f"selected_q3_policy: {selected_policy}")
+    print(f"q3_policy_selection_audit: {q3_audit_path}")
 
     print("\n" + "=" * 72)
     print("Step 3/6: Q4 feature export + acceptor training + trajectory calibration")
@@ -408,6 +438,7 @@ def train_models(
     return {
         "q1_policy_json": str(q1_policy_path),
         "q2_policy_json": str(q2_policy_path),
+        "q5_policy_json": "deterministic_router_object_motion_prediction",
         "q3_model_json": str(q3_model),
         "q4_model_json": str(q4_final_model),
         "q8_model_json": str(q8_model),
@@ -426,6 +457,10 @@ def build_train_task_configs(model_paths: dict[str, str]) -> tuple[TaskRunConfig
             name="q2_occluding_objects",
             task_type="occluding_objects",
             extra_args=("--occluding-ranker", "risk_adaptive"),
+        ),
+        TaskRunConfig(
+            name="q5_object_motion_prediction",
+            task_type="object_motion_prediction",
         ),
         TaskRunConfig(
             name="q3_invisible_objects",
@@ -495,7 +530,7 @@ def run_train_evals(
     archived_dir.mkdir(parents=True, exist_ok=True)
     run_records: list[dict[str, str]] = []
     print("\n" + "=" * 72)
-    print("Step 6/6: Train-split official QA runs for Q1/Q2/Q3/Q4/Q8/Q9")
+    print("Step 6/6: Train-split official QA runs for Q1/Q2/Q3/Q4/Q5/Q8/Q9")
     print("=" * 72)
     for task in task_configs:
         scenario = f"e2e_{run_name}_train_{task.name}"
@@ -546,7 +581,7 @@ def main() -> int:
     e2e_root.mkdir(parents=True, exist_ok=True)
 
     print("=" * 72)
-    print("Phase 9 E2E Train Pipeline")
+    print("E2E Train Pipeline")
     print("=" * 72)
     print(f"run_name: {args.run_name}")
     print(f"e2e_root: {e2e_root}")
@@ -582,6 +617,10 @@ def main() -> int:
         "frozen_policy_config": {
             "q1": {"notable_ranker": "heuristic"},
             "q2": {"occluding_ranker": "risk_adaptive"},
+            "q5": {
+                "task_type": "object_motion_prediction",
+                "policy_type": "deterministic_router_motion_projection",
+            },
             "q3": {
                 "invisible_ranker": "logreg_acceptor",
                 "invisible_max_results": 1,
