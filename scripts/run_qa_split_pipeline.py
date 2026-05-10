@@ -24,6 +24,13 @@ DEFERRED_TASKS = {
     "future_trajectory",
 }
 
+DEFERRED_NUM_FUTURE_WAYPOINTS = {
+    "object_motion_prediction": 1,
+    "agent_motion_prediction": 1,
+    "control_settings": 6,
+    "future_trajectory": 6,
+}
+
 ALL_TASKS = QA_TASKS | DEFERRED_TASKS
 
 
@@ -37,6 +44,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--purpose", required=True, choices=("train_dev", "val_report"))
     parser.add_argument("--split", required=True, choices=("train", "val"))
     parser.add_argument("--task-type", required=True, choices=tuple(sorted(ALL_TASKS)))
+    parser.add_argument(
+        "--qa-type-id",
+        action="append",
+        dest="qa_type_ids",
+        type=int,
+        default=[],
+        help=(
+            "Optional raw V2V-GoT qa_type_id filter. Repeatable. "
+            "Use 15 for Q5 and 17 for Q7 object_motion_prediction splits."
+        ),
+    )
     parser.add_argument("--scenario-name", default="")
     parser.add_argument("--limit", type=int, default=0, help="Use 0 for the full split.")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
@@ -70,6 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--planning-acceptor-model-json", default="")
     parser.add_argument("--future-trajectory-model-json", default="")
+    parser.add_argument("--object-motion-model-json", default="")
+    parser.add_argument("--agent-motion-model-json", default="")
     parser.add_argument(
         "--control-selection-policy",
         default="rule",
@@ -134,10 +154,13 @@ def write_manifest(
     planning_selection_source: str,
     planning_acceptor_model_json: str,
     future_trajectory_model_json: str,
+    object_motion_model_json: str,
+    agent_motion_model_json: str,
     control_selection_policy: str,
     control_model_json: str,
     output_jsonl: Path,
     total_samples: int,
+    qa_type_ids: list[int],
 ) -> None:
     manifest = {
         "repository_root": repository_root,
@@ -154,12 +177,16 @@ def write_manifest(
                 "planning_selection_source": planning_selection_source,
                 "planning_acceptor_model_json": planning_acceptor_model_json,
                 "future_trajectory_model_json": future_trajectory_model_json,
+                "object_motion_model_json": object_motion_model_json,
+                "agent_motion_model_json": agent_motion_model_json,
                 "control_selection_policy": control_selection_policy,
                 "control_model_json": control_model_json,
                 "output_jsonl": str(output_jsonl),
                 "supported_predictions": total_samples,
                 "unsupported_predictions": 0,
                 "total_samples": total_samples,
+                "qa_type_ids": qa_type_ids,
+                "qa_type_id": qa_type_ids[0] if len(qa_type_ids) == 1 else None,
             }
         ],
     }
@@ -169,6 +196,10 @@ def write_manifest(
 def count_jsonl(path: Path) -> int:
     with path.open("r", encoding="utf-8") as handle:
         return sum(1 for line in handle if line.strip())
+
+
+def num_future_waypoints_for_official_eval(task_type: str, qa_type_ids: list[int]) -> int:
+    return DEFERRED_NUM_FUTURE_WAYPOINTS.get(task_type, 0)
 
 
 def main() -> None:
@@ -225,6 +256,8 @@ def main() -> None:
         "--output-jsonl",
         str(prediction_path),
     ]
+    for qa_type_id in args.qa_type_ids:
+        eval_command.extend(["--qa-type-id", str(qa_type_id)])
     if args.progress_every > 0:
         eval_command.extend(["--progress-every", str(args.progress_every)])
     if args.workers > 1:
@@ -235,6 +268,10 @@ def main() -> None:
         eval_command.extend(["--planning-acceptor-model-json", args.planning_acceptor_model_json])
     if args.future_trajectory_model_json:
         eval_command.extend(["--future-trajectory-model-json", args.future_trajectory_model_json])
+    if args.object_motion_model_json:
+        eval_command.extend(["--object-motion-model-json", args.object_motion_model_json])
+    if args.agent_motion_model_json:
+        eval_command.extend(["--agent-motion-model-json", args.agent_motion_model_json])
     if args.control_model_json:
         eval_command.extend(["--control-model-json", args.control_model_json])
     run(eval_command)
@@ -252,10 +289,13 @@ def main() -> None:
         planning_selection_source=args.planning_selection_source,
         planning_acceptor_model_json=args.planning_acceptor_model_json,
         future_trajectory_model_json=args.future_trajectory_model_json,
+        object_motion_model_json=args.object_motion_model_json,
+        agent_motion_model_json=args.agent_motion_model_json,
         control_selection_policy=args.control_selection_policy,
         control_model_json=args.control_model_json,
         output_jsonl=prediction_path,
         total_samples=total_samples,
+        qa_type_ids=[int(value) for value in args.qa_type_ids],
     )
     print(f"saved_manifest: {manifest_path}")
 
@@ -273,6 +313,8 @@ def main() -> None:
         "--task-type",
         args.task_type,
     ]
+    for qa_type_id in args.qa_type_ids:
+        export_command.extend(["--qa-type-id", str(qa_type_id)])
     run(export_command)
 
     if args.skip_official_eval:
@@ -292,7 +334,11 @@ def main() -> None:
         args.task_type,
     ]
     if args.task_type in DEFERRED_TASKS:
-        official_command.extend(["--num-future-waypoints", "6"])
+        num_future_waypoints = num_future_waypoints_for_official_eval(
+            args.task_type,
+            [int(value) for value in args.qa_type_ids],
+        )
+        official_command.extend(["--num-future-waypoints", str(num_future_waypoints)])
         if args.v2vgot_root:
             official_command.extend(
                 [

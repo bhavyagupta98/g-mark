@@ -22,10 +22,32 @@ class TaskRunConfig:
     extra_args: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class Q6E2ETrainingConfig:
+    gbdt_backend: str
+    gbdt_n_estimators: int
+    gbdt_learning_rate: float
+    gbdt_max_depth: int
+    gbdt_min_samples_leaf: int
+    gbdt_subsample: float
+    decision_threshold: float
+
+
+Q6_E2E_TRAINING_DEFAULTS = Q6E2ETrainingConfig(
+    gbdt_backend="sklearn",
+    gbdt_n_estimators=280,
+    gbdt_learning_rate=0.04,
+    gbdt_max_depth=2,
+    gbdt_min_samples_leaf=96,
+    gbdt_subsample=0.7,
+    decision_threshold=0.38,
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run end-to-end train pipeline for frozen Q1/Q2/Q3/Q4/Q5/Q8/Q9 setup: "
+            "Run end-to-end train pipeline for frozen Q1/Q2/Q3/Q4/Q5/Q6/Q7/Q8/Q9 setup: "
             "feature export, model training, train-split QA evaluation, and artifact archival."
         )
     )
@@ -37,6 +59,57 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--v2vgot-root", default="/workspace/repos/V2V-GoT")
     parser.add_argument("--workers", type=int, default=32)
     parser.add_argument("--progress-every", type=int, default=250)
+    parser.add_argument(
+        "--q5-model-family",
+        default="regression_tree",
+        choices=("linear", "piecewise_linear", "regression_tree", "gradient_boosting", "mlp"),
+    )
+    parser.add_argument("--q5-l2-regularization", type=float, default=1e-3)
+    parser.add_argument("--q5-max-match-distance", type=float, default=2.0)
+    parser.add_argument("--q5-max-abs-delta", type=float, default=120.0)
+    parser.add_argument("--q5-piecewise-min-rows", type=int, default=128)
+    parser.add_argument("--q5-tree-max-depth", type=int, default=9)
+    parser.add_argument("--q5-tree-min-leaf", type=int, default=64)
+    parser.add_argument("--q5-tree-min-gain", type=float, default=0.01)
+    parser.add_argument(
+        "--q5-feature-set",
+        default="path_relative",
+        choices=("auto", "base", "path_relative"),
+        help="Q5 object-motion feature set. E2E promotes path_relative for the Phase 9 tree model.",
+    )
+    parser.add_argument(
+        "--q7-model-family",
+        default="regression_tree",
+        choices=("linear", "piecewise_linear", "regression_tree", "gradient_boosting", "mlp"),
+    )
+    parser.add_argument(
+        "--q7-feature-set",
+        default="path_relative",
+        choices=("auto", "base", "path_relative"),
+    )
+    parser.add_argument("--q7-l2-regularization", type=float, default=1e-3)
+    parser.add_argument("--q7-max-match-distance", type=float, default=2.0)
+    parser.add_argument("--q7-max-abs-delta", type=float, default=120.0)
+    parser.add_argument("--q7-piecewise-min-rows", type=int, default=128)
+    parser.add_argument("--q7-tree-max-depth", type=int, default=9)
+    parser.add_argument("--q7-tree-min-leaf", type=int, default=64)
+    parser.add_argument("--q7-tree-min-gain", type=float, default=0.01)
+    parser.add_argument("--q6-gbdt-n-estimators", type=int, default=Q6_E2E_TRAINING_DEFAULTS.gbdt_n_estimators)
+    parser.add_argument("--q6-gbdt-learning-rate", type=float, default=Q6_E2E_TRAINING_DEFAULTS.gbdt_learning_rate)
+    parser.add_argument("--q6-gbdt-max-depth", type=int, default=Q6_E2E_TRAINING_DEFAULTS.gbdt_max_depth)
+    parser.add_argument("--q6-gbdt-min-samples-leaf", type=int, default=Q6_E2E_TRAINING_DEFAULTS.gbdt_min_samples_leaf)
+    parser.add_argument("--q6-gbdt-subsample", type=float, default=Q6_E2E_TRAINING_DEFAULTS.gbdt_subsample)
+    parser.add_argument(
+        "--q6-gbdt-backend",
+        default=Q6_E2E_TRAINING_DEFAULTS.gbdt_backend,
+        choices=("xgboost", "sklearn"),
+        help=(
+            "Q6 GBDT backend. E2E defaults to sklearn because the promoted "
+            "q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38 result was produced "
+            "by the trainer's historical sklearn-first GBDT path."
+        ),
+    )
+    parser.add_argument("--q6-decision-threshold", type=float, default=Q6_E2E_TRAINING_DEFAULTS.decision_threshold)
     parser.add_argument(
         "--allow-val-features-during-training",
         action="store_true",
@@ -62,6 +135,66 @@ def read_json(path: Path) -> dict[str, object]:
 def write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def write_train_markdown(path: Path, manifest: dict[str, object]) -> None:
+    model_paths = manifest.get("model_paths", {})
+    frozen_policy_config = manifest.get("frozen_policy_config", {})
+    if not isinstance(model_paths, dict):
+        model_paths = {}
+    if not isinstance(frozen_policy_config, dict):
+        frozen_policy_config = {}
+    q5 = frozen_policy_config.get("q5", {})
+    q7 = frozen_policy_config.get("q7", {})
+    if not isinstance(q5, dict):
+        q5 = {}
+    if not isinstance(q7, dict):
+        q7 = {}
+
+    lines = [
+        f"# E2E Train Run `{manifest.get('run_name', '')}`",
+        "",
+        "## Object Motion Models",
+        "",
+        "| Task | QA Type | Model | Feature Set | Train Split | Artifact |",
+        "| --- | ---: | --- | --- | --- | --- |",
+        (
+            f"| Q5 object motion | 15 | `{q5.get('model_family', '')}` | "
+            f"`{q5.get('feature_set', '')}` | `train` | `{model_paths.get('q5_model_json', '')}` |"
+        ),
+        (
+            f"| Q7 object motion | 17 | `{q7.get('model_family', '')}` | "
+            f"`{q7.get('feature_set', '')}` | `train` | `{model_paths.get('q7_model_json', '')}` |"
+        ),
+        "",
+        "## Q5/Q7 Evaluation Note",
+        "",
+        (
+            "Q5 and Q7 are trained and archived as separate deployable models. "
+            "The current V2V-GoT validation split has paired Q5/Q7 sample IDs with identical "
+            "scored GT answer strings, while the questions differ in graph context. "
+            "Equal official metrics for Q5 and Q7 therefore indicate duplicated validation "
+            "targets, not shared e2e weights."
+        ),
+        "",
+        "## Reproduction Commands",
+        "",
+        "```bash",
+        f"python3 scripts/e2e/run_e2e_train_pipeline.py --run-name {manifest.get('run_name', '')}",
+        (
+            "python3 scripts/e2e/run_e2e_validation_report.py "
+            f"--manifest-json outputs/e2e_runs/{manifest.get('run_name', '')}/e2e_model_manifest.json"
+        ),
+        "```",
+        "",
+        "## Model Artifacts",
+        "",
+    ]
+    for key, value in sorted(model_paths.items()):
+        lines.append(f"- `{key}`: `{value}`")
+    lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def copy_if_exists(src: Path, dst: Path) -> None:
@@ -108,6 +241,31 @@ def train_models(
     workers: int,
     progress_every: int,
     allow_val_features_during_training: bool,
+    q5_model_family: str,
+    q5_l2_regularization: float,
+    q5_max_match_distance: float,
+    q5_max_abs_delta: float,
+    q5_piecewise_min_rows: int,
+    q5_tree_max_depth: int,
+    q5_tree_min_leaf: int,
+    q5_tree_min_gain: float,
+    q5_feature_set: str,
+    q7_model_family: str,
+    q7_feature_set: str,
+    q7_l2_regularization: float,
+    q7_max_match_distance: float,
+    q7_max_abs_delta: float,
+    q7_piecewise_min_rows: int,
+    q7_tree_max_depth: int,
+    q7_tree_min_leaf: int,
+    q7_tree_min_gain: float,
+    q6_gbdt_n_estimators: int,
+    q6_gbdt_learning_rate: float,
+    q6_gbdt_max_depth: int,
+    q6_gbdt_min_samples_leaf: int,
+    q6_gbdt_subsample: float,
+    q6_gbdt_backend: str,
+    q6_decision_threshold: float,
 ) -> dict[str, str]:
     features_dir = e2e_root / "features"
     models_dir = e2e_root / "models"
@@ -117,7 +275,7 @@ def train_models(
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 72)
-    print("Step 1/6: Q1-Q2 frozen policy snapshots")
+    print("Step 1/8: Q1-Q2 frozen policy snapshots")
     print("=" * 72)
     q1_policy_path = models_dir / "q1_notable_objects_policy.json"
     q2_policy_path = models_dir / "q2_occluding_objects_policy.json"
@@ -141,7 +299,7 @@ def train_models(
     print(f"saved_policy_snapshot: {q2_policy_path}")
 
     print("\n" + "=" * 72)
-    print("Step 2/6: Q3 feature export + training")
+    print("Step 2/8: Q3 feature export + training")
     print("=" * 72)
     q3_train_features = features_dir / "q3_invisible_train_features.jsonl"
     run(
@@ -281,7 +439,7 @@ def train_models(
     print(f"q3_policy_selection_audit: {q3_audit_path}")
 
     print("\n" + "=" * 72)
-    print("Step 3/6: Q4 feature export + acceptor training + trajectory calibration")
+    print("Step 3/8: Q4 feature export + acceptor training + trajectory calibration")
     print("=" * 72)
     q4_train_features = features_dir / "q4_planning_train_features.jsonl"
     run(
@@ -376,7 +534,119 @@ def train_models(
     )
 
     print("\n" + "=" * 72)
-    print("Step 4/6: Q8 model training")
+    print("Step 4/8: Q5/Q7 object-motion model training")
+    print("=" * 72)
+    q5_model = models_dir / "q5_object_motion_model_deployable.json"
+    q5_report = reports_dir / "q5_object_motion_model_report.json"
+    run(
+        [
+            sys.executable,
+            "scripts/train_q5_object_motion_predictor.py",
+            "--v2vgot-root",
+            v2vgot_root,
+            "--split",
+            "train",
+            "--baseline-mode",
+            "cooperative",
+            "--model-family",
+            q5_model_family,
+            "--feature-set",
+            q5_feature_set,
+            "--l2-regularization",
+            str(q5_l2_regularization),
+            "--max-match-distance",
+            str(q5_max_match_distance),
+            "--max-abs-delta",
+            str(q5_max_abs_delta),
+            "--piecewise-min-rows",
+            str(q5_piecewise_min_rows),
+            "--tree-max-depth",
+            str(q5_tree_max_depth),
+            "--tree-min-leaf",
+            str(q5_tree_min_leaf),
+            "--tree-min-gain",
+            str(q5_tree_min_gain),
+            "--output-json",
+            str(q5_model),
+            "--output-report",
+            str(q5_report),
+        ]
+    )
+    q7_model = models_dir / "q7_object_motion_model_deployable.json"
+    q7_report = reports_dir / "q7_object_motion_model_report.json"
+    run(
+        [
+            sys.executable,
+            "scripts/train_q7_object_motion_predictor.py",
+            "--v2vgot-root",
+            v2vgot_root,
+            "--split",
+            "train",
+            "--baseline-mode",
+            "cooperative",
+            "--model-family",
+            q7_model_family,
+            "--feature-set",
+            q7_feature_set,
+            "--l2-regularization",
+            str(q7_l2_regularization),
+            "--max-match-distance",
+            str(q7_max_match_distance),
+            "--max-abs-delta",
+            str(q7_max_abs_delta),
+            "--piecewise-min-rows",
+            str(q7_piecewise_min_rows),
+            "--tree-max-depth",
+            str(q7_tree_max_depth),
+            "--tree-min-leaf",
+            str(q7_tree_min_leaf),
+            "--tree-min-gain",
+            str(q7_tree_min_gain),
+            "--output-json",
+            str(q7_model),
+            "--output-report",
+            str(q7_report),
+        ]
+    )
+
+    print("\n" + "=" * 72)
+    print("Step 5/8: Q6 model training")
+    print("=" * 72)
+    q6_model = models_dir / "q6_agent_motion_gbdt_deployable.json"
+    q6_report = reports_dir / "q6_agent_motion_gbdt_report.json"
+    run(
+        [
+            sys.executable,
+            "scripts/train_q6_agent_motion_notability.py",
+            "--v2vgot-root",
+            v2vgot_root,
+            "--split",
+            "train",
+            "--model-family",
+            "gbdt",
+            "--gbdt-backend",
+            q6_gbdt_backend,
+            "--gbdt-n-estimators",
+            str(q6_gbdt_n_estimators),
+            "--gbdt-learning-rate",
+            str(q6_gbdt_learning_rate),
+            "--gbdt-max-depth",
+            str(q6_gbdt_max_depth),
+            "--gbdt-min-samples-leaf",
+            str(q6_gbdt_min_samples_leaf),
+            "--gbdt-subsample",
+            str(q6_gbdt_subsample),
+            "--decision-threshold",
+            str(q6_decision_threshold),
+            "--output-json",
+            str(q6_model),
+            "--output-report",
+            str(q6_report),
+        ]
+    )
+
+    print("\n" + "=" * 72)
+    print("Step 6/8: Q8 model training")
     print("=" * 72)
     q8_model = models_dir / "q8_control_linear_classifier_deployable.json"
     q8_report = reports_dir / "q8_control_linear_classifier_report.json"
@@ -414,7 +684,7 @@ def train_models(
     )
 
     print("\n" + "=" * 72)
-    print("Step 5/6: Q9 model training")
+    print("Step 7/8: Q9 model training")
     print("=" * 72)
     q9_model = models_dir / "q9_future_trajectory_regressor_deployable.json"
     q9_report = reports_dir / "q9_future_trajectory_regressor_report.json"
@@ -438,7 +708,10 @@ def train_models(
     return {
         "q1_policy_json": str(q1_policy_path),
         "q2_policy_json": str(q2_policy_path),
-        "q5_policy_json": "deterministic_router_object_motion_prediction",
+        "q5_policy_json": "learned_router_object_motion_prediction",
+        "q5_model_json": str(q5_model),
+        "q7_model_json": str(q7_model),
+        "q6_model_json": str(q6_model),
         "q3_model_json": str(q3_model),
         "q4_model_json": str(q4_final_model),
         "q8_model_json": str(q8_model),
@@ -447,6 +720,19 @@ def train_models(
 
 
 def build_train_task_configs(model_paths: dict[str, str]) -> tuple[TaskRunConfig, ...]:
+    q5_extra_args: tuple[str, ...] = ()
+    q5_model_json = str(model_paths.get("q5_model_json", "")).strip()
+    if q5_model_json:
+        q5_extra_args = ("--object-motion-model-json", q5_model_json)
+    q7_extra_args: tuple[str, ...] = ()
+    q7_model_json = str(model_paths.get("q7_model_json", "")).strip()
+    if q7_model_json:
+        q7_extra_args = ("--object-motion-model-json", q7_model_json)
+    q6_extra_args: tuple[str, ...] = ()
+    q6_model_json = str(model_paths.get("q6_model_json", "")).strip()
+    if q6_model_json:
+        q6_extra_args = ("--agent-motion-model-json", q6_model_json)
+
     return (
         TaskRunConfig(
             name="q1_notable_objects",
@@ -461,6 +747,17 @@ def build_train_task_configs(model_paths: dict[str, str]) -> tuple[TaskRunConfig
         TaskRunConfig(
             name="q5_object_motion_prediction",
             task_type="object_motion_prediction",
+            extra_args=("--qa-type-id", "15", *q5_extra_args),
+        ),
+        TaskRunConfig(
+            name="q6_agent_motion_prediction",
+            task_type="agent_motion_prediction",
+            extra_args=q6_extra_args,
+        ),
+        TaskRunConfig(
+            name="q7_object_motion_prediction",
+            task_type="object_motion_prediction",
+            extra_args=("--qa-type-id", "17", *q7_extra_args),
         ),
         TaskRunConfig(
             name="q3_invisible_objects",
@@ -530,7 +827,7 @@ def run_train_evals(
     archived_dir.mkdir(parents=True, exist_ok=True)
     run_records: list[dict[str, str]] = []
     print("\n" + "=" * 72)
-    print("Step 6/6: Train-split official QA runs for Q1/Q2/Q3/Q4/Q5/Q8/Q9")
+    print("Step 8/8: Train-split official QA runs for Q1/Q2/Q3/Q4/Q5/Q6/Q7/Q8/Q9")
     print("=" * 72)
     for task in task_configs:
         scenario = f"e2e_{run_name}_train_{task.name}"
@@ -588,6 +885,11 @@ def main() -> int:
     print(f"v2vgot_root: {args.v2vgot_root}")
     print(f"workers: {args.workers}")
     print(f"allow_val_features_during_training: {args.allow_val_features_during_training}")
+    print(f"q5_model_family: {args.q5_model_family}")
+    print(f"q5_feature_set: {args.q5_feature_set}")
+    print(f"q7_model_family: {args.q7_model_family}")
+    print(f"q7_feature_set: {args.q7_feature_set}")
+    print("q6_weights_source: trained_during_e2e_run")
 
     model_paths = train_models(
         e2e_root=e2e_root,
@@ -595,6 +897,31 @@ def main() -> int:
         workers=args.workers,
         progress_every=args.progress_every,
         allow_val_features_during_training=args.allow_val_features_during_training,
+        q5_model_family=args.q5_model_family,
+        q5_l2_regularization=args.q5_l2_regularization,
+        q5_max_match_distance=args.q5_max_match_distance,
+        q5_max_abs_delta=args.q5_max_abs_delta,
+        q5_piecewise_min_rows=args.q5_piecewise_min_rows,
+        q5_tree_max_depth=args.q5_tree_max_depth,
+        q5_tree_min_leaf=args.q5_tree_min_leaf,
+        q5_tree_min_gain=args.q5_tree_min_gain,
+        q5_feature_set=args.q5_feature_set,
+        q7_model_family=args.q7_model_family,
+        q7_feature_set=args.q7_feature_set,
+        q7_l2_regularization=args.q7_l2_regularization,
+        q7_max_match_distance=args.q7_max_match_distance,
+        q7_max_abs_delta=args.q7_max_abs_delta,
+        q7_piecewise_min_rows=args.q7_piecewise_min_rows,
+        q7_tree_max_depth=args.q7_tree_max_depth,
+        q7_tree_min_leaf=args.q7_tree_min_leaf,
+        q7_tree_min_gain=args.q7_tree_min_gain,
+        q6_gbdt_n_estimators=args.q6_gbdt_n_estimators,
+        q6_gbdt_learning_rate=args.q6_gbdt_learning_rate,
+        q6_gbdt_max_depth=args.q6_gbdt_max_depth,
+        q6_gbdt_min_samples_leaf=args.q6_gbdt_min_samples_leaf,
+        q6_gbdt_subsample=args.q6_gbdt_subsample,
+        q6_gbdt_backend=args.q6_gbdt_backend,
+        q6_decision_threshold=args.q6_decision_threshold,
     )
     task_configs = build_train_task_configs(model_paths)
     train_runs = run_train_evals(
@@ -619,7 +946,52 @@ def main() -> int:
             "q2": {"occluding_ranker": "risk_adaptive"},
             "q5": {
                 "task_type": "object_motion_prediction",
-                "policy_type": "deterministic_router_motion_projection",
+                "qa_type_id": 15,
+                "policy_type": (
+                    "learned_router_motion_projection"
+                    if str(model_paths.get("q5_model_json", "")).strip()
+                    else "deterministic_router_motion_projection"
+                ),
+                "object_motion_model_json": str(model_paths.get("q5_model_json", "")),
+                "weights_source": "trained_during_e2e_run",
+                "training_split": "train",
+                "model_family": args.q5_model_family,
+                "feature_set": args.q5_feature_set,
+                "tree_max_depth": args.q5_tree_max_depth,
+                "tree_min_leaf": args.q5_tree_min_leaf,
+                "tree_min_gain": args.q5_tree_min_gain,
+            },
+            "q6": {
+                "task_type": "agent_motion_prediction",
+                "policy_type": "learned_gbdt_notability",
+                "weights_source": "trained_during_e2e_run",
+                "training_split": "train",
+                "agent_motion_model_json": str(model_paths.get("q6_model_json", "")),
+                "gbdt_backend": args.q6_gbdt_backend,
+                "gbdt_n_estimators": args.q6_gbdt_n_estimators,
+                "gbdt_learning_rate": args.q6_gbdt_learning_rate,
+                "gbdt_max_depth": args.q6_gbdt_max_depth,
+                "gbdt_min_samples_leaf": args.q6_gbdt_min_samples_leaf,
+                "gbdt_subsample": args.q6_gbdt_subsample,
+                "decision_threshold": args.q6_decision_threshold,
+            },
+            "q7": {
+                "task_type": "object_motion_prediction",
+                "qa_type_id": 17,
+                "policy_type": "learned_router_motion_projection",
+                "object_motion_model_json": str(model_paths.get("q7_model_json", "")),
+                "weights_source": "trained_during_e2e_run",
+                "training_split": "train",
+                "model_family": args.q7_model_family,
+                "feature_set": args.q7_feature_set,
+                "tree_max_depth": args.q7_tree_max_depth,
+                "tree_min_leaf": args.q7_tree_min_leaf,
+                "tree_min_gain": args.q7_tree_min_gain,
+                "notes": (
+                    "Q7 trains a separate deployable model on qa_type_id=17 train rows. "
+                    "Current V2V-GoT val labels for paired Q5/Q7 rows are identical, "
+                    "so equal official metrics are expected when models produce the same outputs."
+                ),
             },
             "q3": {
                 "invisible_ranker": "logreg_acceptor",
@@ -641,11 +1013,14 @@ def main() -> int:
     }
     manifest_path = e2e_root / "e2e_model_manifest.json"
     write_json(manifest_path, manifest)
+    manifest_md_path = e2e_root / "e2e_model_manifest.md"
+    write_train_markdown(manifest_md_path, manifest)
 
     print("\n" + "=" * 72)
     print("E2E train pipeline complete")
     print("=" * 72)
     print(f"manifest: {manifest_path}")
+    print(f"manifest_markdown: {manifest_md_path}")
     print("model artifacts:")
     for key, value in model_paths.items():
         print(f"  - {key}: {value}")

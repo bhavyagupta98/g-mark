@@ -8,6 +8,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
+import re
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
@@ -43,6 +44,129 @@ OBJECT_GROUNDING_TASKS = {
 }
 
 
+def _q5_motion_action_label(vx: float, vy: float) -> str:
+    speed = (vx * vx + vy * vy) ** 0.5
+    if speed < 0.1:
+        return "staying at the same location"
+    if abs(vy) > abs(vx):
+        return "turning right" if vy >= 0.0 else "turning left"
+    if vx >= 0.0:
+        return "moving forward"
+    return "turning right" if vy >= 0.0 else "turning left"
+
+
+_Q5_FROM_TO_RE = re.compile(
+    r"(?P<object_id>[A-Za-z0-9_\-]+)\s*=\s*"
+    r"(?P<action>[^;,.]+?)\s+from\s+"
+    r"\((?P<sx>-?\d+(?:\.\d+)?),\s*(?P<sy>-?\d+(?:\.\d+)?)\)\s+to\s+"
+    r"\((?P<tx>-?\d+(?:\.\d+)?),\s*(?P<ty>-?\d+(?:\.\d+)?)\)",
+    re.IGNORECASE,
+)
+_Q5_TRAJECTORY_RE = re.compile(
+    r"(?P<object_id>[A-Za-z0-9_\-]+)\s*=\s*"
+    r"(?P<action>[^;,.]+?)\s+from\s+"
+    r"\((?P<sx>-?\d+(?:\.\d+)?),\s*(?P<sy>-?\d+(?:\.\d+)?)\)\s+"
+    r"trajectory\s+\[(?P<trajectory>[^\]]+)\]",
+    re.IGNORECASE | re.DOTALL,
+)
+_POINT_RE = re.compile(r"\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)")
+
+
+def _parse_q5_router_answer(answer_text: str) -> list[tuple[str, str, float, float, list[tuple[float, float]]]]:
+    rows: list[tuple[str, str, float, float, list[tuple[float, float]]]] = []
+    for match in _Q5_TRAJECTORY_RE.finditer(answer_text):
+        points = [
+            (float(raw_x), float(raw_y))
+            for raw_x, raw_y in _POINT_RE.findall(str(match.group("trajectory")))
+        ]
+        if not points:
+            continue
+        rows.append(
+            (
+                str(match.group("object_id")),
+                str(match.group("action")).strip().lower(),
+                float(match.group("sx")),
+                float(match.group("sy")),
+                points,
+            )
+        )
+    if rows:
+        return rows
+    for match in _Q5_FROM_TO_RE.finditer(answer_text):
+        rows.append(
+            (
+                str(match.group("object_id")),
+                str(match.group("action")).strip().lower(),
+                float(match.group("sx")),
+                float(match.group("sy")),
+                [(float(match.group("tx")), float(match.group("ty")))],
+            )
+        )
+    return rows
+
+
+def _render_q5_motion_output(
+    scene: CooperativeScene,
+    object_ids: tuple[str, ...],
+    answer_text: str,
+) -> str:
+    parsed_answer_rows = _parse_q5_router_answer(answer_text)
+    if parsed_answer_rows:
+        phrases = []
+        for _object_id, action, sx, sy, points in parsed_answer_rows[:3]:
+            normalized_action = action
+            if normalized_action not in {
+                "moving forward",
+                "turning left",
+                "turning right",
+                "staying at the same location",
+            }:
+                dx = points[-1][0] - sx
+                dy = points[-1][1] - sy
+                normalized_action = _q5_motion_action_label(dx, dy)
+            rendered_points = ",".join(f"({x:.1f},{y:.1f})" for x, y in points)
+            phrases.append(
+                "There is a car at "
+                f"({sx:.1f},{sy:.1f}) {normalized_action}. "
+                "The predicted future trajectory is "
+                f"[{rendered_points}]."
+            )
+        return " ".join(phrases)
+
+    selected_tracks = []
+    if object_ids:
+        for object_id in object_ids:
+            track = scene.get_object(object_id)
+            if track is not None:
+                selected_tracks.append(track)
+    if not selected_tracks and scene.object_tracks:
+        selected_tracks = list(scene.object_tracks[:1])
+
+    if not selected_tracks:
+        return "There is no notable object."
+
+    phrases: list[str] = []
+    for track in selected_tracks[:3]:
+        start_x = track.position.x
+        start_y = track.position.y
+        if track.velocity is None:
+            vx = 0.0
+            vy = 0.0
+        else:
+            vx = track.velocity.x
+            vy = track.velocity.y
+        end_x = start_x + vx
+        end_y = start_y + vy
+        action = _q5_motion_action_label(vx, vy)
+        phrases.append(
+            "There is a car at "
+            f"({start_x:.1f},{start_y:.1f}) {action}. "
+            "The predicted future trajectory is "
+            f"[({end_x:.1f},{end_y:.1f})]."
+        )
+    return " ".join(phrases)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -61,6 +185,17 @@ def build_parser() -> argparse.ArgumentParser:
         dest="task_types",
         default=[],
         help="Optional task type to export. Repeatable. Defaults to supported Q1-Q4 tasks in manifest.",
+    )
+    parser.add_argument(
+        "--qa-type-id",
+        action="append",
+        dest="qa_type_ids",
+        type=int,
+        default=[],
+        help=(
+            "Optional raw V2V-GoT qa_type_id export filter/override. Repeatable. "
+            "Use 15 for Q5 and 17 for Q7 object_motion_prediction splits."
+        ),
     )
     parser.add_argument("--scenario-name", default="")
     return parser
@@ -119,6 +254,9 @@ def output_text_for_task(
     object_ids: tuple[str, ...],
     answer_text: str = "",
 ) -> str:
+    if task_type == BenchmarkTaskType.OBJECT_MOTION_PREDICTION:
+        return _render_q5_motion_output(scene, object_ids, answer_text)
+
     if task_type not in OBJECT_GROUNDING_TASKS:
         return answer_text
 
@@ -154,7 +292,7 @@ def output_text_for_task(
 def export_task(
     task_type: BenchmarkTaskType,
     run: dict[str, object],
-    samples_by_task_and_id: dict[tuple[BenchmarkTaskType, str], BenchmarkSample],
+    samples_by_task_qa_and_id: dict[tuple[BenchmarkTaskType, int | None, str], BenchmarkSample],
     evaluator: V2VGoTQAPhase5AEvaluator,
     output_dir: Path,
     baseline_mode: str,
@@ -162,7 +300,9 @@ def export_task(
 ) -> dict[str, object]:
     prediction_path = resolve_repo_path(str(run["output_jsonl"]))
     predictions = load_jsonl(prediction_path)
-    output_path = output_dir / f"{task_type.value}_{scenario_name}_official.jsonl"
+    raw_qa_type_id = run.get("qa_type_id", OFFICIAL_QA_TYPE_BY_TASK[task_type])
+    qa_type_id = int(raw_qa_type_id) if raw_qa_type_id is not None else OFFICIAL_QA_TYPE_BY_TASK[task_type]
+    output_path = output_dir / f"{task_type.value}_qa_type_{qa_type_id}_{scenario_name}_official.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     exported_count = 0
@@ -173,7 +313,16 @@ def export_task(
             predictions.items(),
             key=lambda item: int(item[0]) if item[0].isdigit() else item[0],
         ):
-            sample = samples_by_task_and_id.get((task_type, sample_id))
+            prediction_qa_type_id = prediction.get("qa_type_id", qa_type_id)
+            try:
+                lookup_qa_type_id = int(prediction_qa_type_id) if prediction_qa_type_id is not None else qa_type_id
+            except (TypeError, ValueError):
+                lookup_qa_type_id = qa_type_id
+            if lookup_qa_type_id != qa_type_id:
+                continue
+            sample = samples_by_task_qa_and_id.get((task_type, qa_type_id, sample_id))
+            if sample is None and raw_qa_type_id is None:
+                sample = samples_by_task_qa_and_id.get((task_type, None, sample_id))
             if sample is None:
                 missing_samples += 1
                 continue
@@ -199,7 +348,7 @@ def export_task(
 
     return {
         "task_type": task_type.value,
-        "qa_type_id": OFFICIAL_QA_TYPE_BY_TASK[task_type],
+        "qa_type_id": qa_type_id,
         "source_jsonl": str(prediction_path),
         "output_jsonl": str(output_path),
         "exported_count": exported_count,
@@ -218,15 +367,22 @@ def main() -> None:
 
     selected_task_types = parse_task_types(args.task_types)
     selected_task_set = set(selected_task_types)
+    selected_qa_type_ids = set(int(value) for value in args.qa_type_ids)
 
     repository_root = resolve_v2vgot_root()
     adapter = V2VGoTQABenchmarkAdapter(str(repository_root))
     evaluator = V2VGoTQAPhase5AEvaluator(str(repository_root))
     samples = adapter.load_samples(split_name=split, file_name=args.file_name)
-    samples_by_task_and_id = {
-        (sample.task_type, sample.sample_id): sample
+    samples_by_task_qa_and_id = {
+        (sample.task_type, sample.qa_type_id, sample.sample_id): sample
         for sample in samples
     }
+    samples_by_task_qa_and_id.update(
+        {
+            (sample.task_type, None, sample.sample_id): sample
+            for sample in samples
+        }
+    )
 
     exported_runs: list[dict[str, object]] = []
     for run in manifest.get("runs", []):
@@ -237,11 +393,19 @@ def main() -> None:
             continue
         if selected_task_set and task_type not in selected_task_set:
             continue
+        run_qa_type_id = run.get("qa_type_id", OFFICIAL_QA_TYPE_BY_TASK[task_type])
+        if selected_qa_type_ids:
+            if run_qa_type_id is None and len(selected_qa_type_ids) == 1:
+                run = dict(run)
+                run_qa_type_id = next(iter(selected_qa_type_ids))
+                run["qa_type_id"] = run_qa_type_id
+            if run_qa_type_id is None or int(run_qa_type_id) not in selected_qa_type_ids:
+                continue
         exported_runs.append(
             export_task(
                 task_type=task_type,
                 run=run,
-                samples_by_task_and_id=samples_by_task_and_id,
+                samples_by_task_qa_and_id=samples_by_task_qa_and_id,
                 evaluator=evaluator,
                 output_dir=output_dir,
                 baseline_mode=args.baseline_mode,

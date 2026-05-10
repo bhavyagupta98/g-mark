@@ -11,6 +11,12 @@ from kg_coop_drive.application.planning_awareness import (
 from kg_coop_drive.application.future_trajectory_planner import (
     ControlConditionedFutureTrajectoryPlanner,
 )
+from kg_coop_drive.application.planning.object_motion_predictor import (
+    LearnedObjectMotionPredictor,
+)
+from kg_coop_drive.application.planning.agent_motion_notability_predictor import (
+    LearnedAgentMotionNotabilityPredictor,
+)
 from kg_coop_drive.application.control_settings_policy import (
     ControlSettingsDecision,
     decide_control_settings,
@@ -1813,6 +1819,7 @@ class MotionPrediction:
     start_y: float
     end_x: float
     end_y: float
+    future_points: tuple[tuple[float, float], ...]
     motion_label: str
 
 
@@ -1820,7 +1827,11 @@ class ObjectMotionPredictionHandler(_BaseQueryHandler):
     """Handles qa_type_id 15/17 object-motion-prediction questions."""
 
     task_type = BenchmarkTaskType.OBJECT_MOTION_PREDICTION
-    _prediction_horizon_seconds = 1.0
+
+    def __init__(self, model: dict[str, object] | None = None) -> None:
+        super().__init__()
+        self._model = model or {}
+        self._predictor = LearnedObjectMotionPredictor(model=model)
 
     def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
         predictions = self._predict(sample)
@@ -1837,7 +1848,7 @@ class ObjectMotionPredictionHandler(_BaseQueryHandler):
             (
                 f"{prediction.entity_id}={prediction.motion_label} "
                 f"from ({prediction.start_x:.1f}, {prediction.start_y:.1f}) "
-                f"to ({prediction.end_x:.1f}, {prediction.end_y:.1f})"
+                f"{self._render_motion_tail(prediction)}"
             )
             for prediction in predictions
         )
@@ -1861,51 +1872,79 @@ class ObjectMotionPredictionHandler(_BaseQueryHandler):
                 object_track.object_id,
             ),
         )
+        max_objects = max(1, int(self._safe_float(self._model.get("selection_max_objects"), 3.0)))
+        max_distance_to_trajectory = self._safe_float(
+            self._model.get("selection_max_distance_to_trajectory"),
+            8.0,
+        )
+        include_occluded_uncertain = bool(self._model.get("selection_include_occluded_uncertain", True))
         relevant_objects = tuple(
             object_track
             for object_track in ranked_objects
-            if self._distance_to_trajectory(scene, object_track) <= 8.0
-            or visibility_by_object.get(object_track.object_id) in {
-                VisibilityState.OCCLUDED,
-                VisibilityState.UNCERTAIN,
-            }
-        )[:3]
+            if self._distance_to_trajectory(scene, object_track) <= max_distance_to_trajectory
+            or (
+                include_occluded_uncertain
+                and visibility_by_object.get(object_track.object_id)
+                in {
+                    VisibilityState.OCCLUDED,
+                    VisibilityState.UNCERTAIN,
+                }
+            )
+        )[:max_objects]
         if not relevant_objects:
-            relevant_objects = tuple(ranked_objects[:3])
+            relevant_objects = tuple(ranked_objects[:max_objects])
 
-        return tuple(self._predict_object_motion(object_track) for object_track in relevant_objects)
+        return tuple(
+            self._predict_object_motion(
+                scene=scene,
+                object_track=object_track,
+                visibility_state=visibility_by_object.get(object_track.object_id),
+            )
+            for object_track in relevant_objects
+        )
 
-    def _predict_object_motion(self, object_track) -> MotionPrediction:
-        velocity = object_track.velocity
+    def _predict_object_motion(
+        self,
+        *,
+        scene,
+        object_track,
+        visibility_state: VisibilityState | None,
+    ) -> MotionPrediction:
         start_x = object_track.position.x
         start_y = object_track.position.y
-        if velocity is None:
-            return MotionPrediction(
-                entity_id=object_track.object_id,
-                start_x=start_x,
-                start_y=start_y,
-                end_x=start_x,
-                end_y=start_y,
-                motion_label="stationary",
-            )
-
-        end_x = start_x + velocity.x * self._prediction_horizon_seconds
-        end_y = start_y + velocity.y * self._prediction_horizon_seconds
-        speed = (velocity.x**2 + velocity.y**2) ** 0.5
-        if speed < 0.1:
-            motion_label = "stationary"
-        elif abs(velocity.x) >= abs(velocity.y):
-            motion_label = "moving forward" if velocity.x >= 0.0 else "moving backward"
-        else:
-            motion_label = "moving right" if velocity.y >= 0.0 else "moving left"
+        prediction = self._predictor.predict(
+            scene=scene,
+            object_track=object_track,
+            visibility_state=visibility_state,
+        )
         return MotionPrediction(
             entity_id=object_track.object_id,
             start_x=start_x,
             start_y=start_y,
-            end_x=end_x,
-            end_y=end_y,
-            motion_label=motion_label,
+            end_x=prediction.end_x,
+            end_y=prediction.end_y,
+            future_points=prediction.future_points,
+            motion_label=prediction.motion_label,
         )
+
+    @staticmethod
+    def _safe_float(value: object, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _render_motion_tail(prediction: MotionPrediction) -> str:
+        if len(prediction.future_points) <= 1:
+            return f"to ({prediction.end_x:.1f}, {prediction.end_y:.1f})"
+        return f"trajectory {ObjectMotionPredictionHandler._render_future_points(prediction.future_points)}"
+
+    @staticmethod
+    def _render_future_points(points: tuple[tuple[float, float], ...]) -> str:
+        if not points:
+            return "[]"
+        return "[" + ",".join(f"({x:.1f},{y:.1f})" for x, y in points) + "]"
 
 
 class AgentMotionPredictionHandler(_BaseQueryHandler):
@@ -1913,16 +1952,17 @@ class AgentMotionPredictionHandler(_BaseQueryHandler):
 
     task_type = BenchmarkTaskType.AGENT_MOTION_PREDICTION
 
+    def __init__(self, model: dict[str, object] | None = None) -> None:
+        super().__init__()
+        self._predictor = LearnedAgentMotionNotabilityPredictor(model=model)
+
     def answer(self, sample: BenchmarkSample) -> BenchmarkAnswer:
         scene = sample.scene
         other_agents = tuple(
             agent for agent in scene.agents if agent.agent_id != scene.asker_agent_id
         )
         if other_agents:
-            rendered_predictions = "; ".join(
-                self._render_agent_motion(agent)
-                for agent in other_agents
-            )
+            rendered_predictions = "; ".join(self._render_agent_motion(scene, agent) for agent in other_agents)
             return BenchmarkAnswer(
                 sample_id=sample.sample_id,
                 task_type=self.task_type,
@@ -1955,8 +1995,12 @@ class AgentMotionPredictionHandler(_BaseQueryHandler):
             supported=True,
         )
 
-    @staticmethod
-    def _render_agent_motion(agent) -> str:
+    def _render_agent_motion(self, scene, agent) -> str:
+        learned_notable = self._predictor.predict_is_notable(scene=scene, other_agent=agent)
+        if learned_notable is None:
+            # Conservative fallback aligned to historical behavior.
+            learned_notable = False
+
         if agent.velocity is not None:
             speed = (agent.velocity.x**2 + agent.velocity.y**2) ** 0.5
             if speed >= 0.1:
@@ -1967,16 +2011,18 @@ class AgentMotionPredictionHandler(_BaseQueryHandler):
 
                 end_x = agent.pose.position.x + agent.velocity.x
                 end_y = agent.pose.position.y + agent.velocity.y
+                notable_text = "is a notable object" if learned_notable else "is a not notable object"
                 return (
                     f"{agent.agent_id}={motion_label} from "
                     f"({agent.pose.position.x:.1f}, {agent.pose.position.y:.1f}) "
-                    f"to ({end_x:.1f}, {end_y:.1f})"
+                    f"to ({end_x:.1f}, {end_y:.1f}); {agent.agent_id} {notable_text}"
                 )
 
         if agent.planned_trajectory is None or not agent.planned_trajectory.points:
+            notable_text = "is a notable object" if learned_notable else "is a not notable object"
             return (
                 f"{agent.agent_id}=hold position near "
-                f"({agent.pose.position.x:.1f}, {agent.pose.position.y:.1f})"
+                f"({agent.pose.position.x:.1f}, {agent.pose.position.y:.1f}); {agent.agent_id} {notable_text}"
             )
 
         final_point = agent.planned_trajectory.points[-1]
@@ -1990,10 +2036,11 @@ class AgentMotionPredictionHandler(_BaseQueryHandler):
             motion_label = "move right" if dy >= 0.0 else "move left"
         end_x = agent.pose.position.x + final_point.x
         end_y = agent.pose.position.y + final_point.y
+        notable_text = "is a notable object" if learned_notable else "is a not notable object"
         return (
             f"{agent.agent_id}={motion_label} from "
             f"({agent.pose.position.x:.1f}, {agent.pose.position.y:.1f}) "
-            f"to ({end_x:.1f}, {end_y:.1f})"
+            f"to ({end_x:.1f}, {end_y:.1f}); {agent.agent_id} {notable_text}"
         )
 
     @staticmethod

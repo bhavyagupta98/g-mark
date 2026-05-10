@@ -22,11 +22,13 @@ from kg_coop_drive.application.planning_awareness import (
     build_planning_awareness_orchestrator,
 )
 from kg_coop_drive.application.v2vgotqa_router import (
+    AgentMotionPredictionHandler,
     ControlSettingsHandler,
     FutureTrajectoryHandler,
     InvisibleObjectsHandler,
     InvisibleSelectionPolicy,
     NotableObjectsHandler,
+    ObjectMotionPredictionHandler,
     OccludingObjectsHandler,
     PlanningAwarenessHandler,
     V2VGoTQARouter,
@@ -70,6 +72,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional BenchmarkTaskType value to evaluate. Repeatable.",
     )
     parser.add_argument(
+        "--qa-type-id",
+        action="append",
+        dest="qa_type_ids",
+        type=int,
+        default=[],
+        help=(
+            "Optional raw V2V-GoT qa_type_id filter. Repeatable. "
+            "Useful for splitting Q5 and Q7, which share object_motion_prediction."
+        ),
+    )
+    parser.add_argument(
         "--file-name",
         default="v2v4real_3d_grounding_qa_dataset_v2vgot.json",
     )
@@ -103,6 +116,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--future-trajectory-model-json",
         default="",
         help="Frozen Q9 future-trajectory control-delta model.",
+    )
+    parser.add_argument(
+        "--object-motion-model-json",
+        default="",
+        help="Frozen Q5 object-motion endpoint model.",
+    )
+    parser.add_argument(
+        "--agent-motion-model-json",
+        default="",
+        help="Frozen Q6 agent-motion notability model.",
     )
     parser.add_argument(
         "--control-selection-policy",
@@ -222,7 +245,25 @@ def load_future_trajectory_model(path_value: str) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_object_motion_model(path_value: str) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def load_control_model(path_value: str) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_agent_motion_model(path_value: str) -> dict[str, object]:
     if not path_value:
         return {}
     path = Path(path_value).expanduser()
@@ -250,6 +291,8 @@ def router_config_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "planning_selection_source": args.planning_selection_source,
         "planning_acceptor_model": load_planning_acceptor_model(args.planning_acceptor_model_json),
         "future_trajectory_model": load_future_trajectory_model(args.future_trajectory_model_json),
+        "object_motion_model": load_object_motion_model(args.object_motion_model_json),
+        "agent_motion_model": load_agent_motion_model(args.agent_motion_model_json),
         "control_selection_policy": args.control_selection_policy,
         "control_model": load_control_model(args.control_model_json),
         "notable_ranker": args.notable_ranker,
@@ -295,6 +338,12 @@ def build_router(config: dict[str, Any], llm_client: LocalOpenAICompatibleLLMCli
             PlanningAwarenessHandler(
                 orchestrator=planning_orchestrator,
                 selection_source=str(config["planning_selection_source"]),
+            ),
+            ObjectMotionPredictionHandler(
+                model=dict(config["object_motion_model"]),
+            ),
+            AgentMotionPredictionHandler(
+                model=dict(config["agent_motion_model"]),
             ),
             FutureTrajectoryHandler(
                 planner=ControlConditionedFutureTrajectoryPlanner(
@@ -398,6 +447,9 @@ def main() -> None:
     selected_task_types = parse_task_types(args.task_types)
     if selected_task_types:
         samples = tuple(sample for sample in samples if sample.task_type in selected_task_types)
+    if args.qa_type_ids:
+        selected_qa_type_ids = set(int(value) for value in args.qa_type_ids)
+        samples = tuple(sample for sample in samples if sample.qa_type_id in selected_qa_type_ids)
     samples = apply_sample_limit(samples, args.limit)
     predictions = evaluate_samples_parallel(
         repository_root=repository_root,
@@ -420,6 +472,8 @@ def main() -> None:
     print(f"planning_selection_source: {args.planning_selection_source}")
     print(f"planning_acceptor_model_json: {args.planning_acceptor_model_json}")
     print(f"future_trajectory_model_json: {args.future_trajectory_model_json}")
+    print(f"object_motion_model_json: {args.object_motion_model_json}")
+    print(f"agent_motion_model_json: {args.agent_motion_model_json}")
     print(f"control_selection_policy: {args.control_selection_policy}")
     print(f"control_model_json: {args.control_model_json}")
     print(f"notable_ranker: {args.notable_ranker}")
@@ -447,6 +501,8 @@ def main() -> None:
         print(f"task_types: {[item.value for item in selected_task_types]}")
     else:
         print(f"task_types: {[item.value for item in router.supported_task_types()]}")
+    if args.qa_type_ids:
+        print(f"qa_type_ids: {args.qa_type_ids}")
 
     print()
     print("Predictions")
@@ -481,6 +537,8 @@ def main() -> None:
                             "planning_selection_source": args.planning_selection_source,
                             "planning_acceptor_model_json": args.planning_acceptor_model_json,
                             "future_trajectory_model_json": args.future_trajectory_model_json,
+                            "object_motion_model_json": args.object_motion_model_json,
+                            "agent_motion_model_json": args.agent_motion_model_json,
                             "control_selection_policy": args.control_selection_policy,
                             "control_model_json": args.control_model_json,
                             "notable_ranker": args.notable_ranker,

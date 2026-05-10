@@ -18,6 +18,8 @@ Q_BASELINES = {
     "q1_notable_objects": 0.5250,
     "q2_occluding_objects": 0.3010,
     "q5_object_motion_prediction": 8.0500,
+    "q6_agent_motion_prediction": 0.8740,
+    "q7_object_motion_prediction": 7.6100,
     "q3_invisible_objects": 0.4400,
     "q4_planning_awareness": 0.6080,
     "q8_control_settings": 0.0876,
@@ -37,7 +39,7 @@ class TaskRunConfig:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run val-split official QA evaluations for frozen Q1/Q2/Q3/Q4/Q5/Q8/Q9 "
+            "Run val-split official QA evaluations for frozen Q1/Q2/Q3/Q4/Q5/Q6/Q7/Q8/Q9 "
             "and print report-ready baseline comparison tables."
         )
     )
@@ -113,6 +115,19 @@ def latest_manifest() -> Path:
 
 
 def build_val_task_configs(model_paths: dict[str, str]) -> tuple[TaskRunConfig, ...]:
+    q5_extra_args: tuple[str, ...] = ()
+    q5_model_json = str(model_paths.get("q5_model_json", "")).strip()
+    if q5_model_json:
+        q5_extra_args = ("--object-motion-model-json", q5_model_json)
+    q7_extra_args: tuple[str, ...] = ()
+    q7_model_json = str(model_paths.get("q7_model_json", model_paths.get("q5_model_json", ""))).strip()
+    if q7_model_json:
+        q7_extra_args = ("--object-motion-model-json", q7_model_json)
+    q6_extra_args: tuple[str, ...] = ()
+    q6_model_json = str(model_paths.get("q6_model_json", "")).strip()
+    if q6_model_json:
+        q6_extra_args = ("--agent-motion-model-json", q6_model_json)
+
     return (
         TaskRunConfig(
             name="q1_notable_objects",
@@ -131,8 +146,23 @@ def build_val_task_configs(model_paths: dict[str, str]) -> tuple[TaskRunConfig, 
         TaskRunConfig(
             name="q5_object_motion_prediction",
             task_type="object_motion_prediction",
-            metric_label="L2 Avg All (m)",
+            metric_label="L2 Avg 123 (m)",
             higher_is_better=False,
+            extra_args=("--qa-type-id", "15", *q5_extra_args),
+        ),
+        TaskRunConfig(
+            name="q6_agent_motion_prediction",
+            task_type="agent_motion_prediction",
+            metric_label="Binary Accuracy",
+            higher_is_better=True,
+            extra_args=q6_extra_args,
+        ),
+        TaskRunConfig(
+            name="q7_object_motion_prediction",
+            task_type="object_motion_prediction",
+            metric_label="L2 Avg 123 (m)",
+            higher_is_better=False,
+            extra_args=("--qa-type-id", "17", *q7_extra_args),
         ),
         TaskRunConfig(
             name="q3_invisible_objects",
@@ -226,7 +256,21 @@ def extract_primary_metric(task_name: str, summary_payload: dict[str, object]) -
             raise ValueError("Missing action_edit_dist for Q8")
         return float(action_edit_dist) / 8.0
 
-    if task_name in {"q5_object_motion_prediction", "q9_future_trajectory"}:
+    if task_name in {"q5_object_motion_prediction", "q7_object_motion_prediction"}:
+        q5_l2 = metrics.get("l2_error_avg_123_all")
+        if not isinstance(q5_l2, (float, int)):
+            q5_l2 = metrics.get("l2_error_avg_all")
+        if not isinstance(q5_l2, (float, int)):
+            raise ValueError(f"Missing l2_error_avg_123_all/l2_error_avg_all for {task_name}")
+        return float(q5_l2)
+
+    if task_name == "q6_agent_motion_prediction":
+        acc = metrics.get("binary_classification_accuracy")
+        if not isinstance(acc, (float, int)):
+            raise ValueError("Missing binary_classification_accuracy for Q6")
+        return float(acc)
+
+    if task_name == "q9_future_trajectory":
         l2_all = metrics.get("l2_error_avg_all")
         if not isinstance(l2_all, (float, int)):
             raise ValueError(f"Missing l2_error_avg_all for {task_name}")
@@ -254,6 +298,17 @@ def table_markdown(rows: list[dict[str, object]]) -> str:
             + f"`{row['task']}` | `{row['metric']}` | `{row['ours']:.6f}` | `{row['baseline']:.6f}` | `{row['relative_improvement_pct']:+.2f}%` |"
         )
     return "\n".join(lines)
+
+
+def validation_notes_markdown(model_paths: dict[str, str]) -> str:
+    return (
+        "\n\n## Notes\n\n"
+        "- Q5 and Q7 are evaluated with separate model artifacts when `q7_model_json` is present.\n"
+        f"- Q5 model: `{model_paths.get('q5_model_json', '')}`\n"
+        f"- Q7 model: `{model_paths.get('q7_model_json', '')}`\n"
+        "- In the current V2V-GoT validation split, paired Q5/Q7 rows have identical scored GT answers; "
+        "matching metrics should be interpreted as duplicated validation targets, not shared weights.\n"
+    )
 
 
 def main() -> int:
@@ -337,7 +392,7 @@ def main() -> int:
             }
         )
 
-    markdown = table_markdown(results)
+    markdown = table_markdown(results) + validation_notes_markdown({k: str(v) for k, v in model_paths.items()})
     print()
     print(markdown)
 

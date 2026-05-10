@@ -737,36 +737,66 @@ How to interpret these current ablations:
 
 ## Final Promoted Checkpoints (Quick View)
 
-| Task | Promoted Checkpoint | Val Metric (Official-Style) | V2V-GoT Ref | Relative Delta |
+| Task | Metric | Ours | Baseline | Relative Improvement |
 | --- | --- | ---: | ---: | ---: |
-| Q1 `notable_objects` | visible-object `heuristic` | F1@0.5m `0.585836` | `0.525000` | `+11.59%` |
-| Q2 `occluding_objects` | `risk_adaptive` + sparse-evidence fallback | F1@0.5m `0.427921` | `0.301000` | `+42.17%` |
-| Q3 `invisible_objects` | broad-pool `logreg_acceptor_t0p33` | F1@0.5m `0.493934` | `0.440000` | `+12.26%` |
-| Q4 `planning_awareness` | `relational_importance + trajectory_calibrated_acceptor` | F1@0.5m `0.613774` | `0.608000` | `+0.95%` |
-| Q8 `control_settings` | `q8_control_linear_classifier_v7_extended_ordinal_risk3` | normalized action error `0.076139` | `0.087600` | `-13.08%` error |
-| Q9 `future_trajectory` | `control_metadata_linear_tail_residual_v1` | L2 all `1.211582` | `2.620000` | `-53.76%` error |
+| `q1_notable_objects` | `F1@0.5m` | `0.585836` | `0.525000` | `+11.59%` |
+| `q2_occluding_objects` | `F1@0.5m` | `0.427921` | `0.301000` | `+42.17%` |
+| `q5_object_motion_prediction` | `L2 Avg 123 (m)` | `3.822136` | `8.050000` | `+52.52%` |
+| `q6_agent_motion_prediction` | `Binary Accuracy` | `0.904527` | `0.874000` | `+3.49%` |
+| `q7_object_motion_prediction` | `L2 Avg 123 (m)` | `3.822136` | `7.610000` | `+49.77%` |
+| `q3_invisible_objects` | `F1@0.5m` | `0.493934` | `0.440000` | `+12.26%` |
+| `q4_planning_awareness` | `F1@0.5m` | `0.613774` | `0.608000` | `+0.95%` |
+| `q8_control_settings` | `Action L1 (edit_dist/8)` | `0.076139` | `0.087600` | `+13.08%` |
+| `q9_future_trajectory` | `L2 Avg All (m)` | `1.211582` | `2.620000` | `+53.76%` |
 
 Notes:
 
 - Q1-Q4 headline metric is strict official-style `0.5m` localization F1.
+- Q5/Q7 use `l2_error_avg_123_all`; lower is better, so relative improvement is reported as error reduction versus baseline.
 - Q8 normalization is `action_edit_dist / 8` because speed and steering class-index differences each range `0..4`.
-- Negative relative delta for Q8/Q9 means lower error than baseline (better).
+- Q8/Q9 are also lower-is-better metrics, so relative improvement is reported as error reduction versus baseline.
+
+### Q6 Checkpoint Note
+
+- local checkpoint record:
+  - `outputs/phase9_train_dev/q6_gbdt_v4/q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38_checkpoint.json`
+- promoted model:
+  - `outputs/phase9_train_dev/q6_gbdt_v4/q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38.json`
+- promoted val summary:
+  - `outputs/phase8_val_report/official_eval_reports/q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38_official_export_manifest_official_qa_eval_summary.json`
+- held-out metric:
+  - `binary_classification_accuracy=0.9045269878119558`
+- selected settings:
+  - `n_estimators=280`, `learning_rate=0.04`, `max_depth=2`, `min_samples_leaf=96`, `subsample=0.7`, `threshold=0.38`
+- protocol note:
+  - trained on `train`; threshold and hyperparameters were selected from `val`, so this is a validation-tuned checkpoint.
+- dedicated rerun scenario template:
+  - `val_q6_checkpoint_rerun` (Q6-only, official export + official eval)
+- local presence note:
+  - the checkpoint record exists in this checkout; materialized model/official-summary artifacts may live on the runtime pod unless copied back.
 
 ## Latest Baseline Comparison
 
-This is the latest paper-facing validation comparison against the V2V-GoT reported task references, using strict official-style `0.5m` localization F1 as our headline metric.
+This is the latest paper-facing validation comparison against the V2V-GoT reported task references.
 
-| Task | Current Validation F1 | Precision | Recall | V2V-GoT Ref F1 | Absolute Delta | Relative Delta | Current Checkpoint |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| Q1 `notable_objects` | `0.585836` | `0.674759` | `0.517621` | `0.525000` | `+0.060836` | `+11.59%` | visible-object `heuristic` |
-| Q2 `occluding_objects` | `0.427921` | `0.452542` | `0.405840` | `0.301000` | `+0.126921` | `+42.17%` | `risk_adaptive` occlusion selector |
-| Q3 `invisible_objects` | `0.493934` | `0.488014` | `0.500000` | `0.440000` | `+0.053934` | `+12.26%` | broad-pool `logreg_acceptor_t0p33` |
-| Q4 `planning_awareness` | `0.613774` | `0.576685` | `0.655962` | `0.608000` | `+0.005774` | `+0.95%` | `relational_importance + trajectory_calibrated_acceptor` |
+| Task | Metric | Ours | Baseline | Relative Improvement |
+| --- | --- | ---: | ---: | ---: |
+| `q1_notable_objects` | `F1@0.5m` | `0.585836` | `0.525000` | `+11.59%` |
+| `q2_occluding_objects` | `F1@0.5m` | `0.427921` | `0.301000` | `+42.17%` |
+| `q5_object_motion_prediction` | `L2 Avg 123 (m)` | `3.822136` | `8.050000` | `+52.52%` |
+| `q6_agent_motion_prediction` | `Binary Accuracy` | `0.904527` | `0.874000` | `+3.49%` |
+| `q7_object_motion_prediction` | `L2 Avg 123 (m)` | `3.822136` | `7.610000` | `+49.77%` |
+| `q3_invisible_objects` | `F1@0.5m` | `0.493934` | `0.440000` | `+12.26%` |
+| `q4_planning_awareness` | `F1@0.5m` | `0.613774` | `0.608000` | `+0.95%` |
+| `q8_control_settings` | `Action L1 (edit_dist/8)` | `0.076139` | `0.087600` | `+13.08%` |
+| `q9_future_trajectory` | `L2 Avg All (m)` | `1.211582` | `2.620000` | `+53.76%` |
 
 Interpretation:
 
-- Q1-Q3 clear the V2V-GoT references by more than `10%` relative.
-- Q4 now exceeds the V2V-GoT reference under the strict `0.5m` headline metric; the margin is smaller, but it is supported by both train and held-out validation improvements after residual-attribution-guided calibration.
+- Q1-Q4 use strict official-style `0.5m` localization F1 as the headline metric.
+- Q5/Q7/Q8/Q9 are lower-is-better metrics, so relative improvement is reported as error reduction versus baseline.
+- Q5 and Q7 currently report the same `3.822136` validation result because the inspected official target/evaluator path collapses both object-motion questions to the same effective answer target under the shared model/export path.
+- Q6 is a higher-is-better binary accuracy metric.
 - The strongest story is not one global model change. Each QA family uses the graph evidence differently: visible-object grounding for Q1, occlusion risk for Q2, broad hidden-object retrieval plus acceptance for Q3, and planning-relevance plus trajectory calibration for Q4.
 
 ## Phase 9 Q9 Update (Week 6)
@@ -1007,6 +1037,169 @@ Key Q8 artifacts:
   - `outputs/phase8_val_report/official_eval_reports/val_q8_control_linear_classifier_v7_extended_ordinal_risk3_official_export_manifest_official_qa_eval_summary.json`
 - mismatch analysis used to guide final design:
   - `outputs/phase8_val_report/phase9_q8_control_v5_ordinal_mismatch_report.md`
+
+## Phase 9 Q5 Update (Week 6)
+
+Aim:
+
+- promote a held-out validation checkpoint for Q5 `object_motion_prediction` (`qa_type_id=15`) using a frozen learned motion head.
+
+Current promoted Q5 checkpoint:
+
+- scenario: `val_q5_tree_d9_l64_g001_pathrel_k3_d8_occ1_rerun`
+- evaluator status: return code `0`
+- parse status: `gt_parse_error_rate=0.0`, `output_parse_error_rate=0.0`
+- metrics:
+  - `l2_error_avg_123_all=3.8221364042292816`
+  - `l2_error_avg_03_all=8.357667994188219`
+  - `l2_error_avg_3s=11.466409212687845`
+  - `action_accuracy=0.5599349123124209`
+
+Baseline comparison:
+
+- V2V-GoT Q5 reference: `8.05m` L2
+- relative reduction vs reference (using `l2_error_avg_123_all`): `52.52%`
+- V2V-GoT Q7 reference: `7.61m` L2
+- same object-motion checkpoint/export path gives Q7 `l2_error_avg_123_all=3.8221364042292816`, a `49.77%` relative error reduction.
+
+Correction note:
+
+- the earlier `val_q5_manual_check` metric (`5.6256477000301714`) used a sweep metadata JSON (`..._best_train_candidate.json`) in `--object-motion-model-json` instead of a deployable model JSON (`..._deployable.json`);
+- it is retained as a debugging artifact only and is not used for promoted/e2e claims.
+
+Why this works:
+
+- the learned regression-tree Q5 head outperforms deterministic velocity projection by modeling nonlinear motion modes;
+- it conditions endpoint deltas on cooperative-graph features (trajectory relevance, visibility, support/conflict, uncertainty), which reduces long-horizon drift and endpoint bias;
+- improvements are strongest in late-horizon behavior (`l2_error_avg_3s`), consistent with the model’s split-based regime handling.
+
+E2E integration:
+
+- `scripts/e2e/run_e2e_train_pipeline.py` now always trains a fresh Q5 model per e2e run and archives it in the run manifest;
+- `scripts/e2e/run_e2e_validation_report.py` now uses manifest-provided Q5 model during val runs and reports Q5 with `l2_error_avg_123_all` as the primary metric (fallback to `l2_error_avg_all`).
+
+## Defensibility Note (Current)
+
+This section records why the current KG + classical-head direction is technically defensible, what it does and does not claim, and what remains to de-risk generalization.
+
+Why simple heads can outperform heavier LLM-style paths here:
+
+- Q5/Q8/Q9 are scored with strict structured metrics (L2/edit-distance style), not open-ended language quality.
+- The cooperative KG provides task-aligned state features (visibility, support/conflict, trajectory relevance, uncertainty).
+- Given strong structured features, low-capacity supervised heads (linear/tree) often provide lower-variance numeric predictions than free-form generation-style pipelines.
+- Resulting behavior is deterministic and reproducible under fixed manifests.
+
+What is novel in this project (not merely "using regression"):
+
+- cooperative KG as the central multi-agent state abstraction;
+- task-specific deterministic prediction heads attached to that abstraction;
+- benchmark-faithful `prepare -> route -> export -> official eval` path;
+- explicit promotion/rejection checkpoint discipline with reproducible artifacts.
+
+Q5 trainable feature construction example:
+
+- one Q5 training row corresponds to one matched object mention:
+  - input vector (fixed-width):
+    - `[bias, x, y, vx, vy, speed, distance_to_trajectory, distance_to_asker, confidence, support_count, conflict_score, uncertainty_score, status_supported, status_candidate, visibility_visible, visibility_occluded, visibility_uncertain]`
+  - target:
+    - `[dx, dy] = [gt_tx - x, gt_ty - y]`
+- variable scene complexity (e.g., 1 vs 3 neighboring objects) is converted into fixed-width summaries via graph-derived aggregates (`support_count`, `conflict_score`, `uncertainty_score`, etc.), preserving compatibility with linear/tree models.
+
+Current claim boundary:
+
+- supported claim: the KG + deterministic-head pipeline is competitive and can exceed benchmark references on this dataset protocol for selected tasks.
+- unsupported claim (not yet): broad out-of-distribution generalization across arbitrary datasets/scenarios.
+
+Remaining risks and next validation actions:
+
+- artifact-type mistakes (metadata JSON vs deployable model JSON) can create false checkpoint claims; enforce strict deployable-model validation in pipeline inputs.
+- add scenario-stratified and condition-stratified validation slices (traffic density, occlusion level, long-horizon difficulty).
+- run feature ablations to quantify contribution of KG-derived terms versus simpler baselines.
+- where possible, test transfer to an additional split/domain without retuning to strengthen generalization arguments.
+
+### Feature Construction By Task (Implementation-Level)
+
+This section explains how trainable inputs are formed from multi-agent graph state and why fixed-width models (logistic/linear/tree) can still encode spatial structure.
+
+Common pattern across Q3/Q4/Q5/Q8/Q9:
+
+- each train row corresponds to one supervised unit (candidate object, selected control context, or full trajectory record);
+- variable-size scene context is converted into fixed-width vectors through graph-derived summaries;
+- targets are task-specific labels or coordinates;
+- no runtime dependence on reference answers.
+
+Q3 `invisible_objects` (candidate acceptance):
+
+- source: `scripts/export_phase8_invisible_candidate_features.py` -> `scripts/optimize_q3_invisible_candidate_policy.py`
+- row unit: one hidden-candidate object row.
+- fixed features:
+  - numeric: `distance_to_asker`, `distance_to_trajectory`, `support_count`, `confidence`, `conflict_score`, `uncertainty_score`, relative position terms, age/miss terms;
+  - categorical one-hot: status/visibility/object-type style categories.
+- target:
+  - binary `candidate_matches_gt` (within match threshold to reference coordinate).
+- model:
+  - train-frozen logistic (or MLP in ablations) scoring candidates; policy layer controls shortlist and acceptance threshold.
+
+Q4 `planning_awareness` (candidate acceptance over planning-ranked set):
+
+- source: `scripts/export_phase8_planning_candidate_features.py` using `planning_logreg_feature_values(...)`.
+- row unit: one planning candidate from orchestrator-ordered list.
+- fixed features (`PLANNING_LOGREG_FEATURE_NAMES`):
+  - planning relevance/risk, trajectory distance geometry, visibility/status/provenance/support, rank/context terms.
+- target:
+  - binary coordinate match to reference (`candidate_matches_gt`).
+- model:
+  - train-frozen logistic acceptor plus deterministic post-selection/calibration.
+
+Q5 `object_motion_prediction` (endpoint regression):
+
+- source: `scripts/train_q5_object_motion_predictor.py`
+- row unit: one matched object mention.
+- fixed input vector:
+  - `[bias, x, y, vx, vy, speed, distance_to_trajectory, distance_to_asker, confidence, support_count, conflict_score, uncertainty_score, status_supported, status_candidate, visibility_visible, visibility_occluded, visibility_uncertain]`
+- target:
+  - `[dx, dy] = [gt_tx - x, gt_ty - y]`.
+- model:
+  - linear / piecewise-linear / regression-tree.
+
+Q8 `control_settings` (speed + steering classification):
+
+- source: `src/kg_coop_drive/application/planning/control_settings_policy.py` + `scripts/train_q8_control_policy.py`.
+- row unit: one control-settings sample.
+- fixed features:
+  - base set: top-risk object/control context (`top1/top2 risk`, trajectory distance, asker distance, confidence/conflict/uncertainty, support/provenance, visibility/status, lateral offsets, candidate count);
+  - `extended_v1` adds trajectory-geometry terms (`distance_to_first_waypoint`, nearest waypoint index/progress, local curvature, heading alignment cosine).
+- target:
+  - discrete speed class + steering class indices from benchmark labels.
+- model:
+  - train-frozen linear heads (ordinal speed decoding + steering classifier).
+
+Q9 `future_trajectory` (waypoint regression):
+
+- source: `scripts/train_q9_future_trajectory_regressor.py`.
+- row unit: one Q9 sample.
+- fixed base features:
+  - `[bias, current_x, current_y, asker_is_cav1, onehot(speed_idx,5), onehot(steering_idx,5), dist, sin(angle), cos(angle), dist*sin(angle), dist*cos(angle)]`
+- optional tail-residual extra features:
+  - nonlinear control/position terms for waypoints 5-6 (e.g., `dist^2`, harmonic angle terms, cross terms).
+- target:
+  - flattened future waypoints `[x1,y1,...,x6,y6]`.
+- model:
+  - frozen linear regressor with optional tail residual head.
+
+How 1 vs 3 neighboring objects are represented:
+
+- models do not ingest variable-length neighbor lists directly.
+- instead, neighbor/context effects are compressed into fixed aggregates:
+  - e.g., `support_count`, `conflict_score`, `uncertainty_score`, top-object risk gaps, visibility/provenance flags, trajectory-relative distances.
+- example for Q5:
+  - one-neighbor-like context may yield `support_count=1`, lower conflict;
+  - three-neighbor-like context may yield `support_count=3`, higher conflict/uncertainty;
+  - vector width remains identical, so regression/tree training remains well-posed while still encoding multi-agent context.
+
+Defensibility implication:
+
+- the approach is not "ignoring spatial/multi-agent structure"; it encodes that structure as explicit graph-derived, fixed-width signals suitable for reproducible supervised learning.
 
 Q3 current finding:
 

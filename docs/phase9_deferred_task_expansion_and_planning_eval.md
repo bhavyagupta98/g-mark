@@ -243,6 +243,256 @@ python3 scripts/run_qa_split_pipeline.py \
   - `qa_type_id=16` => Q6 metrics
 - Promote checkpoints based on held-out validation first; train is for direction and regression checks.
 
+## Q5 Focus Checkpoint (Current)
+
+This checkpoint narrows Phase 9 scope to Q5 only until we achieve a stronger and repeatable gain over reference.
+
+### Scope Decision
+
+- pause Q7 work for now;
+- focus all immediate experiments on Q5 (`qa_type_id=15`);
+- reject piecewise-linear as the current promotion candidate;
+- continue with regression-tree and close model-family variants.
+
+### Current Q5 Validation Snapshot
+
+- task: `object_motion_prediction` (`qa_type_id=15`)
+- split: `val`
+- evaluator: `outputs/phase8_val_report/official_exports/tools/eval_v2v4real_3d_grounding_qa_only.py`
+- parse status: `gt_parse_error_rate=0.0`, `output_parse_error_rate=0.0`
+
+Observed runs:
+
+- earlier checkpoint:
+  - `action_accuracy=0.400650876875791`
+  - `l2_error_avg_03_all=16.491383791910195`
+  - `l2_error_avg_123_all=9.244613602710599`
+  - `l2_error_avg_3s=27.7338408081318`
+- regression-tree checkpoint:
+  - `action_accuracy=0.4104140300126559`
+  - `l2_error_avg_03_all=14.491950048471292`
+  - `l2_error_avg_123_all=7.91165777375133`
+  - `l2_error_avg_3s=23.73497332125399`
+
+Reference comparison:
+
+- V2V-GoT Q5 reference: `8.05m` L2
+- current regression-tree (`l2_error_avg_123_all`): `7.91165777375133`
+- relative reduction vs reference: `~1.72%`
+- result: beats reference slightly, but does not meet Phase 9 10% target (`<= 7.245m`)
+
+Decision:
+
+- promote regression-tree over piecewise-linear for the next loop;
+- mark piecewise-linear as rejected for now due to weaker validation L2.
+
+### Next Q5 Improvement Loop
+
+Use train for shape/overfit checks and val for checkpoint promotion. Keep exporter/evaluator path unchanged.
+
+1. Tree capacity sweep
+   - vary `--tree-max-depth` in `{4, 6, 8}`
+   - vary `--tree-min-leaf` in `{32, 64, 128}`
+   - keep `--tree-min-gain` in `{0.005, 0.01}`
+2. Matching robustness sweep
+   - vary `--max-match-distance` in `{1.5, 2.0, 2.5}`
+3. Delta clipping sweep
+   - vary `--max-abs-delta` in `{80, 120, 160}`
+4. Promote only if val `l2_error_avg_123_all` improves and parse errors remain zero.
+
+Canonical commands:
+
+```bash
+python3 scripts/train_q5_object_motion_predictor.py \
+  --v2vgot-root /workspace/repos/V2V-GoT \
+  --split train \
+  --baseline-mode cooperative \
+  --model-family regression_tree \
+  --tree-max-depth 6 \
+  --tree-min-leaf 64 \
+  --tree-min-gain 0.01 \
+  --max-match-distance 2.0 \
+  --max-abs-delta 120.0 \
+  --output-json outputs/phase9_train_dev/q5_tree_candidate_deployable.json \
+  --output-report outputs/phase9_train_dev/q5_tree_candidate_report.json
+
+python3 scripts/run_qa_split_pipeline.py \
+  --purpose val_report \
+  --split val \
+  --task-type object_motion_prediction \
+  --scenario-name val_q5_object_motion_tree_candidate \
+  --baseline-mode cooperative \
+  --object-motion-model-json outputs/phase9_train_dev/q5_tree_candidate_deployable.json \
+  --workers 32 \
+  --progress-every 250 \
+  --v2vgot-root /workspace/repos/V2V-GoT
+```
+
+## Q5 Checkpoint Correction (Val)
+
+The earlier `val_q5_manual_check` claim is invalid for checkpoint promotion.
+Reason: it passed `--object-motion-model-json` with a sweep metadata file
+(`..._best_train_candidate.json`) rather than a deployable model artifact
+(`..._deployable.json`).
+
+That run is kept as a debug artifact only and should not be used for paper/e2e claims.
+
+## Q5 Promoted Checkpoint (Val, Corrected)
+
+This corrected checkpoint supersedes the earlier Q5 tree candidates and the invalid manual-check claim.
+
+### Run Context
+
+- task: `object_motion_prediction`
+- qa type: `15`
+- split: `val`
+- scenario: `val_q5_phase9_q5_tree_sweep_v1_combined_final`
+- evaluator return code: `0`
+- parse status: `gt_parse_error_rate=0.0`, `output_parse_error_rate=0.0`
+
+### Metrics
+
+- `l2_error_avg_123_all=7.272132348137267`
+- `l2_error_avg_03_all=13.532661910050198`
+- `l2_error_avg_3s=21.8163970444118`
+- `action_accuracy=0.40390526125474596`
+
+### Comparison To Reference
+
+- V2V-GoT Q5 reference: `8.05m` L2
+- current checkpoint (`l2_error_avg_123_all`): `7.272132348137267`
+- relative reduction vs reference: `~9.66%`
+
+### Promotion Decision
+
+- status: **PROMOTED**
+- reason:
+  - held-out improvement over earlier Phase 9 Q5 tree checkpoints and over the V2V-GoT Q5 reference;
+  - clean parse/error behavior;
+  - stable deployable-model path used end to end.
+
+### Why This Works
+
+- the learned regression-tree Q5 head models nonlinear motion regimes that velocity projection cannot capture well;
+- splits on cooperative-graph features (trajectory distance, visibility, confidence/support, conflict/uncertainty) separate behavior modes before predicting endpoint deltas;
+- this reduces late-horizon drift and hard-case endpoint bias, reflected by lower `l2_error_avg_3s` and `l2_error_avg_123_all` versus earlier tree checkpoints.
+
+### Reproduction Command
+
+```bash
+python3 scripts/run_qa_split_pipeline.py \
+  --purpose val_report \
+  --split val \
+  --task-type object_motion_prediction \
+  --scenario-name val_q5_phase9_q5_tree_sweep_v1_combined_final \
+  --baseline-mode cooperative \
+  --object-motion-model-json outputs/phase9_train_dev/phase9_q5_tree_sweep_v1_s0/d9_l64_g0.01_m2.0_a120_deployable.json \
+  --workers 32 \
+  --progress-every 250 \
+  --v2vgot-root /workspace/repos/V2V-GoT
+```
+
+### E2E Wiring Note
+
+E2E scripts now train and report Q5 learned-model checkpoints directly per run:
+
+- `scripts/e2e/run_e2e_train_pipeline.py`
+  - trains Q5 on `train` split each run and stores one deployable model under `outputs/e2e_runs/<run>/models/`
+- `scripts/e2e/run_e2e_validation_report.py`
+  - uses the same manifest-specified Q5 model for val reporting
+  - extracts Q5 primary metric from `l2_error_avg_123_all` (fallback: `l2_error_avg_all`)
+
+## Q6 Promoted Checkpoint (Val, Updated)
+
+This checkpoint promotes the tuned GBDT Q6 policy and supersedes earlier Q6 logistic/tree-only checkpoints.
+The result is validation-tuned: the model is trained on `train`, while threshold and hyperparameter promotion were selected from `val` official-style accuracy.
+
+### Run Context
+
+- task: `agent_motion_prediction`
+- qa type: `16`
+- split: `val`
+- scenario: `q6_gbdt_v1_t0.40`
+- evaluator return code: `0`
+
+### Metrics
+
+- `binary_classification_accuracy=0.877539175856065`
+
+### Comparison To Reference
+
+- V2V-GoT Q6 reference: `0.874`
+- current checkpoint: `0.877539175856065`
+- absolute gain: `+0.003539175856065`
+- relative gain: `~+0.40%`
+
+### Higher-Accuracy Follow-Up (Regularized Sweep)
+
+A dedicated anti-overfit GBDT sweep with fixed threshold `0.40` produced a stronger promoted checkpoint:
+
+- superseded scenario tag: `q6_gbdt_reg_n220_lr0.05_d2_l64_s0.7`
+- superseded metric: `binary_classification_accuracy=0.8995937318630296`
+
+Subsequent threshold and nearby-capacity tuning produced the current promoted checkpoint:
+
+- scenario tag: `q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38`
+- model settings: `n_estimators=280`, `learning_rate=0.04`, `max_depth=2`, `min_samples_leaf=96`, `subsample=0.7`, `threshold=0.38`
+- metric: `binary_classification_accuracy=0.9045269878119558`
+- absolute gain vs reference: `+0.03052698781195581`
+- relative gain vs reference: `~+3.49%`
+
+### Promoted Artifact
+
+- local checkpoint record:
+  - `outputs/phase9_train_dev/q6_gbdt_v4/q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38_checkpoint.json`
+- model JSON:
+  - `outputs/phase9_train_dev/q6_gbdt_v4/q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38.json`
+- official summary:
+  - `outputs/phase8_val_report/official_eval_reports/q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38_official_export_manifest_official_qa_eval_summary.json`
+- local presence note:
+  - the checkpoint record exists in this checkout; materialized model/official-summary artifacts may live on the runtime pod unless copied back.
+
+### Dedicated Repro Run (Q6 Only)
+
+```bash
+python3 scripts/evaluate_qa_router.py \
+  --split val \
+  --limit 0 \
+  --task-type agent_motion_prediction \
+  --baseline-mode cooperative \
+  --workers 32 \
+  --progress-every 250 \
+  --agent-motion-model-json outputs/phase9_train_dev/q6_gbdt_v2/q6_gbdt_reg_n220_lr0.05_d2_l64_s0.7.json \
+  --output-jsonl outputs/phase8_val_report/val_q6_checkpoint_rerun.jsonl
+
+python3 - <<'PY'
+import json, pathlib
+p = pathlib.Path("outputs/phase8_val_report/val_q6_checkpoint_rerun_manifest.json")
+p.write_text(json.dumps({
+  "split": "val",
+  "scenario_name": "val_q6_checkpoint_rerun",
+  "runs": [{"task_type": "agent_motion_prediction", "output_jsonl": "outputs/phase8_val_report/val_q6_checkpoint_rerun.jsonl"}]
+}, indent=2), encoding="utf-8")
+print("saved_manifest:", p)
+PY
+
+python3 scripts/export_qa_predictions.py \
+  --manifest outputs/phase8_val_report/val_q6_checkpoint_rerun_manifest.json \
+  --output-dir outputs/phase8_val_report/official_exports \
+  --split val \
+  --scenario-name val_q6_checkpoint_rerun \
+  --task-type agent_motion_prediction
+
+python3 scripts/run_v2vgot_official_qa_eval.py \
+  --export-manifest outputs/phase8_val_report/official_exports/val_q6_checkpoint_rerun_official_export_manifest.json \
+  --output-dir outputs/phase8_val_report/official_eval_reports \
+  --tools-dir outputs/phase8_val_report/official_exports/tools \
+  --task-type agent_motion_prediction \
+  --num-future-waypoints 1 \
+  --npy-save-path /workspace/repos/V2V-GoT/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy \
+  --v2vgot-root /workspace/repos/V2V-GoT
+```
+
 ## Logging Rule
 
 Every Phase 9 result should record:

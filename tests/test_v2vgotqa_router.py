@@ -1612,6 +1612,15 @@ def test_object_motion_prediction_handler_projects_object_velocity() -> None:
     assert "to (13.0, 0.5)" in answer.answer_text
 
 
+def test_object_motion_prediction_handler_uses_model_selection_limit() -> None:
+    handler = ObjectMotionPredictionHandler(model={"selection_max_objects": 1})
+
+    answer = handler.answer(_sample(BenchmarkTaskType.OBJECT_MOTION_PREDICTION))
+
+    assert answer.supported is True
+    assert answer.object_ids == ("visible-car",)
+
+
 def test_agent_motion_prediction_handler_renders_other_agent_positions() -> None:
     handler = AgentMotionPredictionHandler()
 
