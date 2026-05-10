@@ -39,6 +39,14 @@ spec:
           rm -rf /var/lib/apt/lists/*
 
           echo "[INFO] Python version: $(python3 --version)"
+          echo "[INFO] Ensuring scikit-learn is available..."
+          if python3 -c "import sklearn" >/dev/null 2>&1; then
+            echo "[PASS] scikit-learn already installed"
+          else
+            echo "[INFO] scikit-learn missing; installing via pip..."
+            python3 -m pip install --no-cache-dir scikit-learn
+            python3 -c "import sklearn; print('[PASS] scikit-learn version:', sklearn.__version__)"
+          fi
           echo "[INFO] Workspace: ${WORKSPACE}"
           echo "[INFO] Project repo: ${KG_REPO_DIR}"
           echo "[INFO] V2V-GoT repo: ${V2VGOT_ROOT}"
