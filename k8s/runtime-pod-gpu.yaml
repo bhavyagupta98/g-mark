@@ -7,10 +7,31 @@ metadata:
     app: kg-coop-runtime
 spec:
   restartPolicy: OnFailure
+  tolerations:
+    - key: nautilus.io/reservation
+      operator: Exists
+      effect: NoSchedule
+    - effect: PreferNoSchedule
+      key: nvidia.com/gpu
+      operator: Exists
+    - key: nautilus.io/issue
+      operator: Exists
+      effect: NoSchedule
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                  - NVIDIA-A10
+                  - NVIDIA-RTX-A6000
+                  - NVIDIA-A100-SXM4-80GB
 
   containers:
     - name: runtime
-      image: ubuntu:22.04
+      image: pytorch/pytorch:1.12.1-cuda11.3-cudnn8-devel
       imagePullPolicy: IfNotPresent
       command: ["/bin/bash", "-lc"]
       args:
@@ -26,19 +47,37 @@ spec:
           echo "[INFO] Installing runtime dependencies..."
           apt-get update
           apt-get install -y --no-install-recommends \
+            build-essential \
             ca-certificates \
+            cmake \
             python3 \
             python3-numpy \
             python3-pip \
             python3-pytest \
             python3-venv \
             git \
+            libgl1 \
+            libglib2.0-0 \
             less \
             vim \
             tmux
           rm -rf /var/lib/apt/lists/*
 
           echo "[INFO] Python version: $(python3 --version)"
+          echo "[INFO] Checking GPU visibility..."
+          if command -v nvidia-smi >/dev/null 2>&1; then
+            nvidia-smi
+          else
+            echo "[WARN] nvidia-smi not found in image; checking PyTorch CUDA only."
+          fi
+          python3 - <<'PY'
+          import torch
+          print("[INFO] torch:", torch.__version__)
+          print("[INFO] torch.cuda.is_available:", torch.cuda.is_available())
+          if torch.cuda.is_available():
+              print("[INFO] cuda device:", torch.cuda.get_device_name(0))
+          PY
+
           echo "[INFO] Ensuring scikit-learn is available..."
           if python3 -c "import sklearn" >/dev/null 2>&1; then
             echo "[PASS] scikit-learn already installed"
@@ -95,14 +134,22 @@ spec:
         requests:
           cpu: "8"
           memory: "32Gi"
+          nvidia.com/gpu: 1
         limits:
           cpu: "8"
           memory: "32Gi"
+          nvidia.com/gpu: 1
       volumeMounts:
-        - name: storage
+        - name: workspace
           mountPath: /workspace
+        - name: dshm
+          mountPath: /dev/shm
 
   volumes:
-    - name: storage
+    - name: workspace
       persistentVolumeClaim:
         claimName: bgupta-pvc
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 8Gi
