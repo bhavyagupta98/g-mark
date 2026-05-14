@@ -40,6 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--v2vgot-root", default="/workspace/repos/V2V-GoT")
     parser.add_argument("--split", default="train", choices=("train", "val"))
+    parser.add_argument(
+        "--file-name",
+        default="v2v4real_3d_grounding_qa_dataset_v2vgot.json",
+        help=(
+            "QA JSON filename under the split co_llm directory, or an absolute "
+            "path to an isolated QA JSON."
+        ),
+    )
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-report", default="")
     parser.add_argument("--num-future-waypoints", type=int, default=6)
@@ -76,6 +84,13 @@ def dataset_path(v2vgot_root: Path, split: str) -> Path:
         / "co_llm"
         / "v2v4real_3d_grounding_qa_dataset_v2vgot.json"
     )
+
+
+def resolve_dataset_path(v2vgot_root: Path, split: str, file_name: str) -> Path:
+    file_path = Path(file_name).expanduser()
+    if file_path.is_absolute():
+        return file_path
+    return dataset_path(v2vgot_root, split).with_name(file_name)
 
 
 def parse_current_position(question: str) -> tuple[float, float] | None:
@@ -427,7 +442,11 @@ def train_linear_metadata_tail_residual_model(
 
 def main() -> None:
     args = build_parser().parse_args()
-    path = dataset_path(Path(args.v2vgot_root).expanduser().resolve(), args.split)
+    path = resolve_dataset_path(
+        Path(args.v2vgot_root).expanduser().resolve(),
+        args.split,
+        args.file_name,
+    )
     with path.open("r", encoding="utf-8") as handle:
         records = [
             record

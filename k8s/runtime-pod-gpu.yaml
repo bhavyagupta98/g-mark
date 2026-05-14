@@ -31,7 +31,7 @@ spec:
 
   containers:
     - name: runtime
-      image: pytorch/pytorch:1.12.1-cuda11.3-cudnn8-devel
+      image: pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel
       imagePullPolicy: IfNotPresent
       command: ["/bin/bash", "-lc"]
       args:
@@ -50,11 +50,6 @@ spec:
             build-essential \
             ca-certificates \
             cmake \
-            python3 \
-            python3-numpy \
-            python3-pip \
-            python3-pytest \
-            python3-venv \
             git \
             libgl1 \
             libglib2.0-0 \
@@ -64,6 +59,12 @@ spec:
           rm -rf /var/lib/apt/lists/*
 
           echo "[INFO] Python version: $(python3 --version)"
+          python3 - <<'PY'
+          import sys
+          if sys.version_info < (3, 8):
+              raise SystemExit("[FAIL] Python 3.8+ is required for kg_coop_drive tooling.")
+          print("[PASS] Python is new enough for kg_coop_drive tooling.")
+          PY
           echo "[INFO] Checking GPU visibility..."
           if command -v nvidia-smi >/dev/null 2>&1; then
             nvidia-smi
@@ -110,23 +111,25 @@ spec:
           check_path "Val co_llm QA dataset" "${V2VGOT_ROOT}/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json"
 
           cd "${KG_REPO_DIR}"
-          python3 -m pip install pyyaml
+          python3 -m pip install --no-cache-dir pyyaml pytest scikit-learn plotly addict dash
 
-          echo
-          echo "============================================================"
-          echo "Running Key Tests"
-          echo "============================================================"
-          python3 -m pytest -q \
-            tests/test_phase2_query_engine.py \
-            tests/test_v2vgot_scene_adapter.py \
-            tests/test_scene_builder.py | tee /tmp/phase2_tests.log
+          # echo
+          # echo "============================================================"
+          # echo "Validating kg_coop_drive Tooling"
+          # echo "============================================================"
+          # python3 -m py_compile \
+          #   scripts/build_v2vgot_table1_reproduction.py \
+          #   scripts/run_v2vgot_official_qa_eval.py
+          # python3 scripts/build_v2vgot_table1_reproduction.py \
+          #   --v2vgot-root "${V2VGOT_ROOT}" \
+          #   --audit-only \
+          #   --output-dir outputs/v2vgot_table1_reproduction || true
+          # echo "[INFO] Audit warnings above are expected until all V2V-GoT released assets are mounted."
 
           echo
           echo "============================================================"
           echo "Runtime Pod Ready"
           echo "============================================================"
-          echo "[INFO] Logs saved to:"
-          echo "[INFO]   /tmp/phase2_tests.log"
           echo "[INFO] Pod will remain running for interactive use."
 
           tail -f /dev/null

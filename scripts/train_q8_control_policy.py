@@ -22,6 +22,7 @@ from kg_coop_drive.application.control_settings_policy import (  # noqa: E402
     parse_speed_steering_idx,
 )
 from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
+from kg_coop_drive.application.v2vgotqa_evaluator import GraphAblationMode  # noqa: E402
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType  # noqa: E402
 from kg_coop_drive.infrastructure.v2vgot_benchmark_adapter import V2VGoTQABenchmarkAdapter  # noqa: E402
 
@@ -32,7 +33,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--v2vgot-root", default="/workspace/repos/V2V-GoT")
     parser.add_argument("--split", default="train", choices=("train", "val"))
+    parser.add_argument(
+        "--file-name",
+        default="v2v4real_3d_grounding_qa_dataset_v2vgot.json",
+        help=(
+            "QA JSON filename under the split co_llm directory, or an absolute "
+            "path to an isolated QA JSON."
+        ),
+    )
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
+    parser.add_argument(
+        "--graph-ablation-mode",
+        default=GraphAblationMode.FULL.value,
+        choices=tuple(item.value for item in GraphAblationMode),
+    )
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-report", default="")
     parser.add_argument("--limit", type=int, default=0)
@@ -170,11 +184,14 @@ def speed_risk_bucket(risk_value: float, low: float, high: float) -> str:
 def main() -> None:
     args = build_parser().parse_args()
     adapter = V2VGoTQABenchmarkAdapter(args.v2vgot_root)
-    evaluator = V2VGoTQAPhase5AEvaluator(args.v2vgot_root)
+    evaluator = V2VGoTQAPhase5AEvaluator(
+        args.v2vgot_root,
+        graph_ablation=args.graph_ablation_mode,
+    )
 
     samples = tuple(
         sample
-        for sample in adapter.load_samples(split_name=args.split)
+        for sample in adapter.load_samples(split_name=args.split, file_name=args.file_name)
         if sample.task_type == BenchmarkTaskType.CONTROL_SETTINGS
     )
     if args.limit > 0:

@@ -21,6 +21,7 @@ from kg_coop_drive.application.planning_awareness import (  # noqa: E402
     build_planning_awareness_orchestrator,
 )
 from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
+from kg_coop_drive.application.v2vgotqa_evaluator import GraphAblationMode  # noqa: E402
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType  # noqa: E402
 from kg_coop_drive.infrastructure.v2vgot_benchmark_adapter import V2VGoTQABenchmarkAdapter  # noqa: E402
 
@@ -43,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split", default="train", choices=("train", "val"))
     parser.add_argument("--file-name", default="v2v4real_3d_grounding_qa_dataset_v2vgot.json")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
+    parser.add_argument(
+        "--graph-ablation-mode",
+        default=GraphAblationMode.FULL.value,
+        choices=tuple(item.value for item in GraphAblationMode),
+    )
     parser.add_argument("--planning-ranker", default="relational_importance")
     parser.add_argument("--match-threshold", type=float, default=0.5)
     parser.add_argument("--limit", type=int, default=0, help="Use 0 for the full split.")
@@ -97,7 +103,10 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     adapter = V2VGoTQABenchmarkAdapter(str(v2vgot_root))
-    evaluator = V2VGoTQAPhase5AEvaluator(str(v2vgot_root))
+    evaluator = V2VGoTQAPhase5AEvaluator(
+        str(v2vgot_root),
+        graph_ablation=args.graph_ablation_mode,
+    )
     orchestrator = build_planning_awareness_orchestrator(
         ranker=args.planning_ranker,
         selection_policy="default",

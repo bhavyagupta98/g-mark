@@ -140,8 +140,27 @@ python3 scripts/e2e/run_e2e_validation_report.py \
 Starting point:
 
 - V2V4Real provides synchronized two-vehicle cooperative driving scenes.
-- V2V-GoT adds the QA records and processed assets used by the benchmark path.
+- The upstream V2V4Real / OpenCOOD-style cooperative perception pipeline turns
+  the raw synchronized sensor data into processed perception artifacts: detected
+  boxes, scores, point-cloud/feature outputs, poses, ground-truth boxes, object
+  IDs, visibility/support labels, and related `.npy` assets.
+- V2V-GoT adds the QA records and processed assets used by the benchmark path,
+  stored under `DMSTrack/V2V4Real/official_models/.../npy/co_llm`.
 - Each QA row identifies the split, timestamp/frame, asking vehicle, question type, reference answer text, and raw scene metadata.
+- G-MARK does not claim to convert raw camera/LiDAR frames into text or detections.
+  It starts from the same V2V4Real-derived processed scene/perception evidence
+  that the V2V-GoT/V2V-LLM benchmark stack exposes, then converts that evidence
+  into an explicit cooperative knowledge graph.
+
+Pipeline boundary:
+
+```text
+V2V4Real synchronized sensors
+  -> OpenCOOD-style cooperative perception / fusion processing
+  -> V2V-GoT processed artifacts and QA records
+  -> G-MARK scene graph construction
+  -> task-specific graph readout / planning heads
+```
 
 Scene loading:
 
@@ -1737,3 +1756,72 @@ Interpretation:
 - Q3 demonstrates cooperative hidden-object reasoning under partial observability.
 - The strongest Q3 improvement came from separating candidate retrieval from candidate acceptance.
 - All three current validation results exceed the V2V-GoT paper references, and all three clear the Phase 8 `+10%` target.
+
+## G-MARK Architecture Ablation Plan
+
+The next paper-facing ablation is an isolated G-MARK component study on the
+existing V2V-GoT-QA/V2V4Real train and validation splits. This is separate from
+V2V-GoT Table-I reproduction and from perception-backbone comparisons.
+
+Why we are doing this:
+
+- The headline Q1-Q9 table shows performance, but it does not prove which parts
+  of the graph architecture matter.
+- The central paper claim is that an explicit cooperative scene graph is useful:
+  it stores objects, visibility, provenance, retained candidates,
+  uncertainty/conflict, and derived relations for downstream reasoning.
+- A component ablation directly tests that claim by removing one graph ingredient
+  at a time while keeping the benchmark and evaluator fixed.
+
+Planned ablation rows:
+
+| Row | Baseline Mode | Graph Mode | Question Answered |
+| --- | --- | --- | --- |
+| `full` | `cooperative` | `full` | Full G-MARK reference |
+| `no_provenance` | `cooperative` | `no_provenance` | Does source-agent/support tracking matter? |
+| `no_candidate_retention` | `cooperative` | `no_candidate_retention` | Do retained weak/partner-only hypotheses matter? |
+| `no_uncertainty_conflict` | `cooperative` | `no_uncertainty_conflict` | Do conflict and uncertainty scores prevent noisy selections? |
+| `no_graph_relations` | `cooperative` | `no_graph_relations` | Do derived graph edges help beyond object attributes? |
+| `ego_only_graph` | `ego_only` | `full` | How much does cooperative evidence add over asking-agent evidence? |
+| `flat_non_graph_readout` | `cooperative` | `flat_non_graph_readout` | Is a flat object list enough, or does graph structure add value? |
+
+Two execution designs are now supported:
+
+- Validation-only ablations reuse an existing full G-MARK manifest and perturb
+  the graph only at validation time. These are quick diagnostics.
+- Train+validation ablations train ablation-specific artifacts on the train split
+  and evaluate them on the validation split. These are the stronger
+  paper-facing ablation numbers.
+
+Implementation status:
+
+- Additive graph-ablation modes are wired through the evaluator and split
+  pipeline with default `full`, so existing e2e train/validation behavior remains
+  unchanged unless an ablation flag is explicitly passed.
+- The isolated runner is `scripts/e2e/run_gmark_ablation_report.py`.
+- The Kubernetes job is `k8s/gmark-ablation-job.yaml`.
+- The runbook is `docs/gmark_ablation_runbook.md`.
+- Outputs are isolated under `outputs/gmark_ablations/<run_name>/`.
+
+Expected final table shape:
+
+| Ablation | Q1 F1 | Q2 F1 | Q3 F1 | Q4 F1 | Q5 L2 | Q6 Acc | Q7 L2 | Q8 L1 | Q9 L2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `full` | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| `no_provenance` | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| `no_candidate_retention` | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| `no_uncertainty_conflict` | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| `no_graph_relations` | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| `ego_only_graph` | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| `flat_non_graph_readout` | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+
+Interpretation target:
+
+- If full G-MARK beats `ego_only_graph`, the table supports the value of
+  cooperative evidence.
+- If full G-MARK beats `flat_non_graph_readout`, the table supports the value of
+  graph structure rather than only object geometry.
+- If specific task families drop under `no_candidate_retention`,
+  `no_provenance`, or `no_uncertainty_conflict`, the table explains which graph
+  fields matter for invisible-object, planning-awareness, motion, and control
+  reasoning.

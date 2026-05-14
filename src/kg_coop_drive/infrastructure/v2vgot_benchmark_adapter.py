@@ -41,6 +41,7 @@ class V2VGoTQABenchmarkAdapter:
 
         records = self._scene_adapter.load_records(split_name=split_name, file_name=file_name)
         previous_record_by_scene_timestamp = self._index_previous_records(records)
+        is_released_table1_q9_file = self._is_released_table1_q9_file(file_name)
         samples: list[BenchmarkSample] = []
         for index, record in enumerate(records):
             previous_record = previous_record_by_scene_timestamp.get(
@@ -50,7 +51,12 @@ class V2VGoTQABenchmarkAdapter:
                 record,
                 previous_record=previous_record,
             )
-            qa_type_id = self._read_qa_type_id(record)
+            qa_type_id = 19 if is_released_table1_q9_file else self._read_qa_type_id(record)
+            task_type = (
+                BenchmarkTaskType.FUTURE_TRAJECTORY
+                if is_released_table1_q9_file
+                else self.classify_record(record)
+            )
             sample_id = self._read_sample_id(record, index=index)
             samples.append(
                 BenchmarkSample(
@@ -58,7 +64,7 @@ class V2VGoTQABenchmarkAdapter:
                     dataset_name="V2V-GoT-QA",
                     split_name=split_name,
                     file_name=file_name,
-                    task_type=self.classify_record(record),
+                    task_type=task_type,
                     scene=scene,
                     raw_record=record,
                     qa_type_id=qa_type_id,
@@ -131,6 +137,8 @@ class V2VGoTQABenchmarkAdapter:
                 or question.startswith("what is the future trajectory")
             ):
                 return BenchmarkTaskType.FUTURE_TRAJECTORY
+            if "notable" not in question and "visible" not in question and "object" not in question:
+                return BenchmarkTaskType.FUTURE_TRAJECTORY
         if "visible" in question:
             if "notable" in question:
                 return BenchmarkTaskType.NOTABLE_OBJECTS
@@ -185,3 +193,8 @@ class V2VGoTQABenchmarkAdapter:
         scenario_index = record.get("scenario_index", "unknown_scene")
         global_timestamp_index = record.get("global_timestamp_index", "unknown_time")
         return f"{scenario_index}:{global_timestamp_index}:{index}"
+
+    @staticmethod
+    def _is_released_table1_q9_file(file_name: str) -> bool:
+        path_name = Path(file_name).name
+        return path_name.startswith("v2v4real_3d_grounding_qa_dataset_nq9")

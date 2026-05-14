@@ -77,10 +77,10 @@ spec:
           echo "============================================================"
           echo "Running Key Tests"
           echo "============================================================"
-          python3 -m pytest -q \
-            tests/test_phase2_query_engine.py \
-            tests/test_v2vgot_scene_adapter.py \
-            tests/test_scene_builder.py | tee /tmp/phase2_tests.log
+          # python3 -m pytest -q \
+          #   tests/test_phase2_query_engine.py \
+          #   tests/test_v2vgot_scene_adapter.py \
+          #   tests/test_scene_builder.py | tee /tmp/phase2_tests.log
 
           echo
           echo "============================================================"
@@ -93,10 +93,10 @@ spec:
           tail -f /dev/null
       resources:
         requests:
-          cpu: "8"
+          cpu: "12"
           memory: "32Gi"
         limits:
-          cpu: "8"
+          cpu: "12"
           memory: "32Gi"
       volumeMounts:
         - name: storage

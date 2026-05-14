@@ -297,6 +297,7 @@ def export_task(
     output_dir: Path,
     baseline_mode: str,
     scenario_name: str,
+    progress_every: int,
 ) -> dict[str, object]:
     prediction_path = resolve_repo_path(str(run["output_jsonl"]))
     predictions = load_jsonl(prediction_path)
@@ -309,6 +310,7 @@ def export_task(
     missing_samples = 0
     missing_objects = 0
     with output_path.open("w", encoding="utf-8") as handle:
+        total_predictions = len(predictions)
         for sample_id, prediction in sorted(
             predictions.items(),
             key=lambda item: int(item[0]) if item[0].isdigit() else item[0],
@@ -326,16 +328,20 @@ def export_task(
             if sample is None:
                 missing_samples += 1
                 continue
-            prepared_scene = evaluator.prepare_sample(sample, baseline_mode=baseline_mode)
             object_ids = normalize_ids(prediction)
-            missing_objects += sum(1 for object_id in object_ids if prepared_scene.get_object(object_id) is None)
             output_record = dict(sample.raw_record)
-            output_record["outputs"] = output_text_for_task(
-                task_type,
-                prepared_scene,
-                object_ids,
-                prediction_answer_text(prediction),
-            )
+            if task_type in OBJECT_GROUNDING_TASKS or task_type == BenchmarkTaskType.OBJECT_MOTION_PREDICTION:
+                prepared_scene = evaluator.prepare_sample(sample, baseline_mode=baseline_mode)
+                missing_objects += sum(1 for object_id in object_ids if prepared_scene.get_object(object_id) is None)
+                output_record["outputs"] = output_text_for_task(
+                    task_type,
+                    prepared_scene,
+                    object_ids,
+                    prediction_answer_text(prediction),
+                )
+            else:
+                # Q6/Q8/Q9 style tasks do not require graph/object grounding export text synthesis.
+                output_record["outputs"] = prediction_answer_text(prediction)
             output_record["kg_prediction"] = {
                 "sample_id": sample_id,
                 "task_type": task_type.value,
@@ -345,6 +351,13 @@ def export_task(
             }
             handle.write(json.dumps(output_record) + "\n")
             exported_count += 1
+            if progress_every > 0 and (exported_count == 1 or exported_count % progress_every == 0 or exported_count == total_predictions):
+                print(
+                    f"[INFO] export_progress task={task_type.value} "
+                    f"{exported_count}/{total_predictions} "
+                    f"missing_samples={missing_samples} missing_objects={missing_objects}",
+                    flush=True,
+                )
 
     return {
         "task_type": task_type.value,
@@ -359,39 +372,66 @@ def export_task(
 
 def main() -> None:
     args = build_parser().parse_args()
+    print("[INFO] export_qa_predictions: start", flush=True)
     manifest_path = resolve_repo_path(args.manifest)
+    print(f"[INFO] manifest_path: {manifest_path}", flush=True)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     split = args.split or str(manifest.get("split", "val"))
     scenario_name = args.scenario_name or str(manifest.get("scenario_name", manifest_path.stem))
     output_dir = resolve_repo_path(args.output_dir)
+    print(f"[INFO] split={split} scenario_name={scenario_name}", flush=True)
+    print(f"[INFO] output_dir={output_dir}", flush=True)
 
     selected_task_types = parse_task_types(args.task_types)
     selected_task_set = set(selected_task_types)
     selected_qa_type_ids = set(int(value) for value in args.qa_type_ids)
+    print(
+        "[INFO] filters: "
+        f"task_types={sorted(value.value for value in selected_task_set) if selected_task_set else 'all'} "
+        f"qa_type_ids={sorted(selected_qa_type_ids) if selected_qa_type_ids else 'all'}",
+        flush=True,
+    )
 
     repository_root = resolve_v2vgot_root()
+    print(f"[INFO] repository_root={repository_root}", flush=True)
+    print("[INFO] adapter_init", flush=True)
     adapter = V2VGoTQABenchmarkAdapter(str(repository_root))
+    print("[INFO] evaluator_init", flush=True)
     evaluator = V2VGoTQAPhase5AEvaluator(str(repository_root))
+    print(f"[INFO] loading_samples split={split} file_name={args.file_name}", flush=True)
     samples = adapter.load_samples(split_name=split, file_name=args.file_name)
+    print(f"[INFO] loaded_samples={len(samples)}", flush=True)
+    print("[INFO] building_sample_index_maps", flush=True)
     samples_by_task_qa_and_id = {
         (sample.task_type, sample.qa_type_id, sample.sample_id): sample
         for sample in samples
     }
+    print(f"[INFO] exact_index_size={len(samples_by_task_qa_and_id)}", flush=True)
     samples_by_task_qa_and_id.update(
         {
             (sample.task_type, None, sample.sample_id): sample
             for sample in samples
         }
     )
+    print(f"[INFO] merged_index_size={len(samples_by_task_qa_and_id)}", flush=True)
 
     exported_runs: list[dict[str, object]] = []
+    run_count = 0
     for run in manifest.get("runs", []):
         if not isinstance(run, dict):
             continue
+        run_count += 1
         task_type = BenchmarkTaskType(str(run["task_type"]))
+        print(
+            f"[INFO] considering_run#{run_count} "
+            f"task={task_type.value} qa_type_id={run.get('qa_type_id')}",
+            flush=True,
+        )
         if task_type not in OFFICIAL_QA_TYPE_BY_TASK:
+            print(f"[INFO] skip_run#{run_count}: unsupported task for official export", flush=True)
             continue
         if selected_task_set and task_type not in selected_task_set:
+            print(f"[INFO] skip_run#{run_count}: filtered by task_type", flush=True)
             continue
         run_qa_type_id = run.get("qa_type_id", OFFICIAL_QA_TYPE_BY_TASK[task_type])
         if selected_qa_type_ids:
@@ -400,7 +440,12 @@ def main() -> None:
                 run_qa_type_id = next(iter(selected_qa_type_ids))
                 run["qa_type_id"] = run_qa_type_id
             if run_qa_type_id is None or int(run_qa_type_id) not in selected_qa_type_ids:
+                print(f"[INFO] skip_run#{run_count}: filtered by qa_type_id", flush=True)
                 continue
+        print(
+            f"[INFO] exporting_run#{run_count} task={task_type.value} qa_type_id={run_qa_type_id}",
+            flush=True,
+        )
         exported_runs.append(
             export_task(
                 task_type=task_type,
@@ -410,7 +455,15 @@ def main() -> None:
                 output_dir=output_dir,
                 baseline_mode=args.baseline_mode,
                 scenario_name=scenario_name,
+                progress_every=250,
             )
+        )
+        last = exported_runs[-1]
+        print(
+            f"[INFO] exported_run#{run_count} task={last['task_type']} "
+            f"exported={last['exported_count']} missing_samples={last['missing_samples']} "
+            f"missing_objects={last['missing_objects']}",
+            flush=True,
         )
 
     export_manifest = {
@@ -423,6 +476,7 @@ def main() -> None:
     }
     export_manifest_path = output_dir / f"{scenario_name}_official_export_manifest.json"
     export_manifest_path.write_text(json.dumps(export_manifest, indent=2), encoding="utf-8")
+    print(f"[INFO] export_manifest_written={export_manifest_path}", flush=True)
 
     task_scope = ",".join(sorted(str(run["task_type"]) for run in exported_runs)) if exported_runs else "none"
     print("=" * 72)

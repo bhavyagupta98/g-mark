@@ -29,6 +29,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
+from kg_coop_drive.application.v2vgotqa_evaluator import GraphAblationMode  # noqa: E402
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType  # noqa: E402
 from kg_coop_drive.domain.scene import VisibilityState  # noqa: E402
 from kg_coop_drive.infrastructure.v2vgot_benchmark_adapter import V2VGoTQABenchmarkAdapter  # noqa: E402
@@ -67,7 +68,20 @@ def build_parser(task_label: str = "Q5") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=f"Train frozen {task_label} object-motion endpoint model.")
     parser.add_argument("--v2vgot-root", default="/workspace/repos/V2V-GoT")
     parser.add_argument("--split", default="train", choices=("train", "val"))
+    parser.add_argument(
+        "--file-name",
+        default="v2v4real_3d_grounding_qa_dataset_v2vgot.json",
+        help=(
+            "QA JSON filename under the split co_llm directory, or an absolute "
+            "path to an isolated QA JSON."
+        ),
+    )
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
+    parser.add_argument(
+        "--graph-ablation-mode",
+        default=GraphAblationMode.FULL.value,
+        choices=tuple(item.value for item in GraphAblationMode),
+    )
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-report", default="")
     parser.add_argument("--limit", type=int, default=0)
@@ -474,11 +488,14 @@ def parse_hidden_layer_sizes(value: str) -> tuple[int, ...]:
 
 def run_training(*, args: argparse.Namespace, qa_type_id: int, task_label: str) -> None:
     adapter = V2VGoTQABenchmarkAdapter(args.v2vgot_root)
-    evaluator = V2VGoTQAPhase5AEvaluator(args.v2vgot_root)
+    evaluator = V2VGoTQAPhase5AEvaluator(
+        args.v2vgot_root,
+        graph_ablation=args.graph_ablation_mode,
+    )
 
     samples = tuple(
         sample
-        for sample in adapter.load_samples(split_name=args.split)
+        for sample in adapter.load_samples(split_name=args.split, file_name=args.file_name)
         if sample.task_type == BenchmarkTaskType.OBJECT_MOTION_PREDICTION
         and sample.qa_type_id == qa_type_id
     )

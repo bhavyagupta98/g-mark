@@ -1,0 +1,248 @@
+{
+  "asset_audit": [
+    {
+      "label": "V2V-GoT root",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+      "exists": true
+    },
+    {
+      "label": "V2V-LLM Q5 QA JSON",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vllmq5.json",
+      "exists": true
+    },
+    {
+      "label": "V2V-GoT Q9 QA JSON",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_nq9sm3w6dc.json",
+      "exists": true
+    },
+    {
+      "label": "Q9 collision GT root",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy",
+      "exists": true
+    },
+    {
+      "label": "LLaVA model_vqa_loader",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/llava/eval/model_vqa_loader.py",
+      "exists": true
+    },
+    {
+      "label": "V2V-LLM eval script",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/scripts/v1_5/eval/eval_v2v4real_3d_grounding_v2vllmq5.sh",
+      "exists": true
+    },
+    {
+      "label": "V2V-GoT Q9 eval script",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/scripts/v1_5/eval/eval_v2v4real_3d_grounding_nq9.sh",
+      "exists": true
+    },
+    {
+      "label": "No Fusion inference script",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/scripts/v1_5/inference_task_lora_7b_my_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_ego_only.sh",
+      "exists": true
+    },
+    {
+      "label": "No Fusion checkpoint",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/checkpoints/llava-v1.5-7b-task-lora/llava-v1.5-7b-task-lora_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_ego_only/checkpoint-490",
+      "exists": false
+    },
+    {
+      "label": "No Fusion feature source `no_fusion_keep_all`",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm",
+      "exists": true
+    },
+    {
+      "label": "Early Fusion inference script",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/scripts/v1_5/inference_task_lora_7b_my_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_early.sh",
+      "exists": true
+    },
+    {
+      "label": "Early Fusion checkpoint",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/checkpoints/llava-v1.5-7b-task-lora/llava-v1.5-7b-task-lora_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_early/checkpoint-490",
+      "exists": false
+    },
+    {
+      "label": "Early Fusion feature source `early`",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/early/npy/co_llm",
+      "exists": false
+    },
+    {
+      "label": "AttFuse inference script",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/scripts/v1_5/inference_task_lora_7b_my_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_attfuse.sh",
+      "exists": true
+    },
+    {
+      "label": "AttFuse checkpoint",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/checkpoints/llava-v1.5-7b-task-lora/llava-v1.5-7b-task-lora_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_attfuse/checkpoint-490",
+      "exists": false
+    },
+    {
+      "label": "AttFuse feature source `attfuse`",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/attfuse/npy/co_llm",
+      "exists": false
+    },
+    {
+      "label": "V2X-ViT inference script",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/scripts/v1_5/inference_task_lora_7b_my_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_v2xvit.sh",
+      "exists": true
+    },
+    {
+      "label": "V2X-ViT checkpoint",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/checkpoints/llava-v1.5-7b-task-lora/llava-v1.5-7b-task-lora_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_v2xvit/checkpoint-490",
+      "exists": false
+    },
+    {
+      "label": "V2X-ViT feature source `v2xvit`",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/v2xvit/npy/co_llm",
+      "exists": false
+    },
+    {
+      "label": "CoBEVT inference script",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/scripts/v1_5/inference_task_lora_7b_my_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_cobevt.sh",
+      "exists": true
+    },
+    {
+      "label": "CoBEVT checkpoint",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/checkpoints/llava-v1.5-7b-task-lora/llava-v1.5-7b-task-lora_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2_cobevt/checkpoint-490",
+      "exists": false
+    },
+    {
+      "label": "CoBEVT feature source `cobevt`",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/cobevt/npy/co_llm",
+      "exists": false
+    },
+    {
+      "label": "V2V-LLM inference script",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/scripts/v1_5/inference_task_lora_7b_my_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2.sh",
+      "exists": true
+    },
+    {
+      "label": "V2V-LLM checkpoint",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/checkpoints/llava-v1.5-7b-task-lora/llava-v1.5-7b-task-lora_v2v4real_3d_grounding_v2vllmq5_10ep_both_shallow_f2/checkpoint-490",
+      "exists": false
+    },
+    {
+      "label": "V2V-LLM feature source `no_fusion_keep_all`",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm",
+      "exists": true
+    },
+    {
+      "label": "V2V-GoT checkpoint",
+      "path": "/Users/bhavya/Desktop/ms_projects/V2V-GoT/LLaVA/checkpoints/llava-v1.5-7b-task-lora/llava-v1.5-7b-task-lora_v2v4real_3d_grounding_v2vgot_10ep_both_shallow_f2/checkpoint-4330",
+      "exists": false
+    }
+  ],
+  "rows": [
+    {
+      "method": "No Fusion",
+      "family": "reported_v2vgot_table_i",
+      "l2_1s": 3.47,
+      "l2_2s": 5.79,
+      "l2_3s": 8.26,
+      "l2_avg": 5.84,
+      "cr_1s": 1.48,
+      "cr_2s": 4.24,
+      "cr_3s": 7.72,
+      "cr_avg": 4.48,
+      "comm_mb": 0.0,
+      "source": "V2V-GoT Table I"
+    },
+    {
+      "method": "Early Fusion",
+      "family": "reported_v2vgot_table_i",
+      "l2_1s": 3.48,
+      "l2_2s": 5.61,
+      "l2_3s": 7.82,
+      "l2_avg": 5.63,
+      "cr_1s": 1.16,
+      "cr_2s": 3.51,
+      "cr_3s": 5.66,
+      "cr_avg": 3.44,
+      "comm_mb": 1.9208,
+      "source": "V2V-GoT Table I"
+    },
+    {
+      "method": "AttFuse",
+      "family": "reported_v2vgot_table_i",
+      "l2_1s": 3.65,
+      "l2_2s": 6.21,
+      "l2_3s": 8.75,
+      "l2_avg": 6.2,
+      "cr_1s": 1.19,
+      "cr_2s": 4.41,
+      "cr_3s": 6.38,
+      "cr_avg": 3.99,
+      "comm_mb": 0.4008,
+      "source": "V2V-GoT Table I"
+    },
+    {
+      "method": "V2X-ViT",
+      "family": "reported_v2vgot_table_i",
+      "l2_1s": 3.46,
+      "l2_2s": 5.8,
+      "l2_3s": 8.19,
+      "l2_avg": 5.81,
+      "cr_1s": 1.45,
+      "cr_2s": 4.24,
+      "cr_3s": 6.59,
+      "cr_avg": 4.09,
+      "comm_mb": 0.4008,
+      "source": "V2V-GoT Table I"
+    },
+    {
+      "method": "CoBEVT",
+      "family": "reported_v2vgot_table_i",
+      "l2_1s": 3.38,
+      "l2_2s": 5.42,
+      "l2_3s": 7.46,
+      "l2_avg": 5.42,
+      "cr_1s": 1.31,
+      "cr_2s": 4.41,
+      "cr_3s": 5.75,
+      "cr_avg": 3.82,
+      "comm_mb": 0.4008,
+      "source": "V2V-GoT Table I"
+    },
+    {
+      "method": "V2V-LLM",
+      "family": "reported_v2vgot_table_i",
+      "l2_1s": 2.9,
+      "l2_2s": 4.91,
+      "l2_3s": 6.98,
+      "l2_avg": 4.93,
+      "cr_1s": 0.75,
+      "cr_2s": 2.87,
+      "cr_3s": 4.93,
+      "cr_avg": 2.85,
+      "comm_mb": 0.4068,
+      "source": "V2V-GoT Table I"
+    },
+    {
+      "method": "V2V-GoT",
+      "family": "reported_v2vgot_table_i",
+      "l2_1s": 1.65,
+      "l2_2s": 2.63,
+      "l2_3s": 3.59,
+      "l2_avg": 2.62,
+      "cr_1s": 0.12,
+      "cr_2s": 1.92,
+      "cr_3s": 3.45,
+      "cr_avg": 1.83,
+      "comm_mb": 0.4068,
+      "source": "V2V-GoT Table I"
+    },
+    {
+      "method": "G-MARK full",
+      "family": "gmark_local",
+      "l2_1s": 0.9505697172486655,
+      "l2_2s": 1.3546696480180747,
+      "l2_3s": 1.3295076830327082,
+      "l2_avg": 1.2115823494331495,
+      "cr_1s": 0.0,
+      "cr_2s": 0.0,
+      "cr_3s": 0.0,
+      "cr_avg": 0.0,
+      "comm_mb": null,
+      "source": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_val_report/official_eval_reports/future_trajectory_qa_type_19_official_eval.log"
+    }
+  ]
+}

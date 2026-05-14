@@ -56,8 +56,33 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--scenario-name", default="")
+    parser.add_argument(
+        "--file-name",
+        default="v2v4real_3d_grounding_qa_dataset_v2vgot.json",
+        help=(
+            "QA JSON filename under the split co_llm directory, or an absolute "
+            "path to an isolated QA JSON."
+        ),
+    )
     parser.add_argument("--limit", type=int, default=0, help="Use 0 for the full split.")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
+    parser.add_argument(
+        "--graph-ablation-mode",
+        default="full",
+        choices=(
+            "full",
+            "no_provenance",
+            "no_candidate_retention",
+            "no_uncertainty_conflict",
+            "no_graph_relations",
+            "flat_non_graph_readout",
+        ),
+    )
+    parser.add_argument(
+        "--output-root",
+        default="",
+        help="Optional isolated output root. Defaults to outputs/phase8_<purpose>.",
+    )
     parser.add_argument("--v2vgot-root", default="")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--notable-ranker", default="heuristic", choices=("heuristic", "energy", "llm"))
@@ -146,9 +171,11 @@ def write_manifest(
     path: Path,
     repository_root: str,
     split: str,
+    file_name: str,
     task_type: str,
     scenario_name: str,
     baseline_mode: str,
+    graph_ablation_mode: str,
     planning_ranker: str,
     planning_selection_policy: str,
     planning_selection_source: str,
@@ -165,13 +192,16 @@ def write_manifest(
     manifest = {
         "repository_root": repository_root,
         "split": split,
+        "file_name": file_name,
         "scenario_name": scenario_name,
         "task_types": [task_type],
         "runs": [
             {
                 "task_type": task_type,
                 "scenario_name": scenario_name,
+                "file_name": file_name,
                 "baseline_mode": baseline_mode,
+                "graph_ablation_mode": graph_ablation_mode,
                 "planning_ranker": planning_ranker,
                 "planning_selection_policy": planning_selection_policy,
                 "planning_selection_source": planning_selection_source,
@@ -210,7 +240,9 @@ def main() -> None:
         raise SystemExit("purpose=val_report must use --split val.")
 
     scenario = scenario_name(args)
-    output_root = REPO_ROOT / "outputs" / f"phase8_{args.purpose}"
+    output_root = Path(args.output_root).expanduser() if args.output_root else REPO_ROOT / "outputs" / f"phase8_{args.purpose}"
+    if not output_root.is_absolute():
+        output_root = (REPO_ROOT / output_root).resolve()
     prediction_path = output_root / f"{scenario}.jsonl"
     manifest_path = output_root / f"{scenario}_manifest.json"
     official_dir = output_root / "official_exports"
@@ -229,6 +261,8 @@ def main() -> None:
         args.task_type,
         "--baseline-mode",
         args.baseline_mode,
+        "--graph-ablation-mode",
+        args.graph_ablation_mode,
         "--planning-ranker",
         args.planning_ranker,
         "--planning-selection-policy",
@@ -255,6 +289,8 @@ def main() -> None:
         str(args.invisible_min_relative_to_best),
         "--output-jsonl",
         str(prediction_path),
+        "--file-name",
+        args.file_name,
     ]
     for qa_type_id in args.qa_type_ids:
         eval_command.extend(["--qa-type-id", str(qa_type_id)])
@@ -281,9 +317,11 @@ def main() -> None:
         path=manifest_path,
         repository_root=args.v2vgot_root or "/workspace/repos/V2V-GoT",
         split=args.split,
+        file_name=args.file_name,
         task_type=args.task_type,
         scenario_name=scenario,
         baseline_mode=args.baseline_mode,
+        graph_ablation_mode=args.graph_ablation_mode,
         planning_ranker=args.planning_ranker,
         planning_selection_policy=args.planning_selection_policy,
         planning_selection_source=args.planning_selection_source,
@@ -312,6 +350,8 @@ def main() -> None:
         scenario,
         "--task-type",
         args.task_type,
+        "--file-name",
+        args.file_name,
     ]
     for qa_type_id in args.qa_type_ids:
         export_command.extend(["--qa-type-id", str(qa_type_id)])

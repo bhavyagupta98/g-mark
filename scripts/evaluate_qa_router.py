@@ -15,7 +15,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator
+from kg_coop_drive.application.v2vgotqa_evaluator import GraphAblationMode, V2VGoTQAPhase5AEvaluator
 from kg_coop_drive.application.planning_awareness import (
     PlanningAwarenessRanker,
     PlanningAwarenessSelectionPolicy,
@@ -64,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split", default="val", choices=("val", "train"))
     parser.add_argument("--limit", type=int, default=25, help="Maximum samples to evaluate. Use 0 for the full split.")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
+    parser.add_argument(
+        "--graph-ablation-mode",
+        default=GraphAblationMode.FULL.value,
+        choices=tuple(item.value for item in GraphAblationMode),
+        help="Optional G-MARK graph ablation. Defaults to full graph behavior.",
+    )
     parser.add_argument(
         "--task-type",
         action="append",
@@ -369,10 +375,14 @@ def chunk_samples(samples: tuple[object, ...], workers: int) -> list[tuple[objec
     ]
 
 
-def evaluate_chunk_worker(payload: tuple[int, tuple[object, ...], str, str, dict[str, Any], int]):
-    chunk_index, samples, repository_root, baseline_mode, router_config, progress_every = payload
+def evaluate_chunk_worker(payload: tuple[int, tuple[object, ...], str, str, str, dict[str, Any], int]):
+    chunk_index, samples, repository_root, baseline_mode, graph_ablation_mode, router_config, progress_every = payload
     router = build_router(router_config, llm_client=None)
-    evaluator = V2VGoTQAPhase5AEvaluator(repository_root, router=router)
+    evaluator = V2VGoTQAPhase5AEvaluator(
+        repository_root,
+        router=router,
+        graph_ablation=graph_ablation_mode,
+    )
     predictions = evaluator.evaluate_samples(
         samples,
         baseline_mode=baseline_mode,
@@ -386,6 +396,7 @@ def evaluate_samples_parallel(
     repository_root: Path,
     samples: tuple[object, ...],
     baseline_mode: str,
+    graph_ablation_mode: str,
     router_config: dict[str, Any],
     workers: int,
     progress_every: int,
@@ -393,7 +404,11 @@ def evaluate_samples_parallel(
     chunks = chunk_samples(samples, workers)
     if len(chunks) == 1:
         router = build_router(router_config)
-        evaluator = V2VGoTQAPhase5AEvaluator(str(repository_root), router=router)
+        evaluator = V2VGoTQAPhase5AEvaluator(
+            str(repository_root),
+            router=router,
+            graph_ablation=graph_ablation_mode,
+        )
         return evaluator.evaluate_samples(
             samples,
             baseline_mode=baseline_mode,
@@ -410,6 +425,7 @@ def evaluate_samples_parallel(
                     chunk,
                     str(repository_root),
                     baseline_mode,
+                    graph_ablation_mode,
                     router_config,
                     progress_every,
                 ),
@@ -455,6 +471,7 @@ def main() -> None:
         repository_root=repository_root,
         samples=samples,
         baseline_mode=args.baseline_mode,
+        graph_ablation_mode=args.graph_ablation_mode,
         router_config=router_config,
         workers=args.workers,
         progress_every=args.progress_every,
@@ -467,6 +484,7 @@ def main() -> None:
     print(f"repository_root: {repository_root}")
     print(f"split: {args.split}")
     print(f"baseline_mode: {args.baseline_mode}")
+    print(f"graph_ablation_mode: {args.graph_ablation_mode}")
     print(f"planning_ranker: {args.planning_ranker}")
     print(f"planning_selection_policy: {args.planning_selection_policy}")
     print(f"planning_selection_source: {args.planning_selection_source}")
@@ -532,6 +550,7 @@ def main() -> None:
                             "answer_text": prediction.answer_text,
                             "object_ids": list(prediction.object_ids),
                             "baseline_mode": prediction.baseline_mode,
+                            "graph_ablation_mode": args.graph_ablation_mode,
                             "planning_ranker": args.planning_ranker,
                             "planning_selection_policy": args.planning_selection_policy,
                             "planning_selection_source": args.planning_selection_source,
