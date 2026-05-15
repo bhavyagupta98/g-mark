@@ -93,10 +93,10 @@ spec:
           tail -f /dev/null
       resources:
         requests:
-          cpu: "12"
+          cpu: "8"
           memory: "32Gi"
         limits:
-          cpu: "12"
+          cpu: "8"
           memory: "32Gi"
       volumeMounts:
         - name: storage

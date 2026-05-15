@@ -1,0 +1,33 @@
+{
+  "run_name": "gmark_q9_debug_q8numeric_ridge_tiny",
+  "v2vgot_root": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+  "train_file_name": "v2v4real_3d_grounding_qa_dataset_v2vgot.json",
+  "val_file_name": "v2v4real_3d_grounding_qa_dataset_nq9sm3w6dc.json",
+  "include_q8_pred_features": true,
+  "q8_feature_source": {
+    "mode": "q8_model_json",
+    "q8_model_json": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase9_train_dev/q8_control_linear_classifier_smoke500_deployable.json",
+    "train_q8_features_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_debug_q8numeric_ridge_tiny/q8_model_features/gmark_q9_debug_q8numeric_ridge_tiny_q8_features_train.jsonl",
+    "val_q8_features_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_debug_q8numeric_ridge_tiny/q8_model_features/gmark_q9_debug_q8numeric_ridge_tiny_q8_features_val.jsonl",
+    "note": "Q8 controls are predicted from KG-prepared scenes separately for train and val, matching V2V-GoT staged Q8->Q9 context."
+  },
+  "train_rows": 10,
+  "val_rows": 10,
+  "models": [
+    {
+      "model_name": "ridge",
+      "model_json": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_debug_q8numeric_ridge_tiny/gmark_q9_debug_q8numeric_ridge_tiny_ridge_model.json",
+      "prediction_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_debug_q8numeric_ridge_tiny/gmark_q9_debug_q8numeric_ridge_tiny_ridge_predictions.jsonl",
+      "prediction_manifest_json": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_debug_q8numeric_ridge_tiny/gmark_q9_debug_q8numeric_ridge_tiny_ridge_manifest.json",
+      "train_rows": 10,
+      "val_rows": 10,
+      "train_l2_avg": 1.9812892159255007,
+      "val_l2_1s": 1.989912749883051,
+      "val_l2_2s": 2.011558269593568,
+      "val_l2_3s": 1.9812892159255007,
+      "val_l2_avg": 1.9812892159255007,
+      "official_export_manifest_json": null,
+      "official_summary_json": null
+    }
+  ]
+}

@@ -2,6 +2,14 @@
 
 This is the compact reference checkpoint for the current paper-facing QA results. It intentionally omits most exploratory history and keeps only the current approach, metrics, reasoning, selected ablation evidence, artifacts, and reproduction commands.
 
+## Latest Q9 Freeze (Table-I Row)
+
+- Frozen row: `G-MARK (ElasticNet-26)`
+- Metrics: `L2(1s/2s/3s/avg)=1.65/2.71/3.77/2.71`, `CR avg=0.00`, `Comm MB=0.0159`
+- Comparator: `V2V-GoT L2 avg=2.62`, `Comm MB=0.4068`
+- Key read: near V2V-GoT trajectory quality with significantly lower communication.
+- Detailed checkpoint and run learnings: `docs/q9_clean_sweep_progress_checkpoint.md`
+
 ## Aim And Novelty
 
 Aim:
@@ -819,6 +827,145 @@ Interpretation:
 - The strongest story is not one global model change. Each QA family uses the graph evidence differently: visible-object grounding for Q1, occlusion risk for Q2, broad hidden-object retrieval plus acceptance for Q3, and planning-relevance plus trajectory calibration for Q4.
 
 ## Phase 9 Q9 Update (Week 6)
+
+### Clean Q9 Sweep Checkpoint: Q8 Prompt-Context Ridge
+
+Status: recorded as the current clean-sweep Q9 checkpoint family, not yet promoted over the older legacy Q9 headline row.
+
+Run identity:
+
+- run name: `gmark_q9_q8context_ridge_v1_withq8feat`
+- model: `ridge`
+- feature source: `--q8-feature-source question_context`
+- feature shape: `train_shape=(11925, 26)`, `val_shape=(3446, 26)`
+- target shape: `target_shape=(11925, 12)`
+- protocol note: Q8 speed/steering values are parsed from the Q8 context already present in the Q9 prompt. This should be described as **Q9 + provided Q8 prompt context**, not strict end-to-end predicted Q8 -> Q9.
+
+Command:
+
+```bash
+python3 scripts/run_gmark_q9_model_sweep.py \
+  --run-name gmark_q9_q8context_ridge_v1_withq8feat \
+  --v2vgot-root /workspace/repos/V2V-GoT \
+  --output-root outputs/v2vgot_table1_reproduction/gmark_q9_sweep \
+  --val-file-name v2v4real_3d_grounding_qa_dataset_nq9sm3w6dc.json \
+  --models ridge \
+  --include-q8-pred-features \
+  --q8-feature-source question_context \
+  --progress-every 250 \
+  --run-official-eval
+```
+
+Local sweep metrics:
+
+- `train_l2_avg=3.457594`
+- `val_l2_avg=3.919460`
+
+Official validation metrics:
+
+- `l2_error_avg_1s=1.8233988941198525`
+- `l2_error_avg_2s=2.912197374602219`
+- `l2_error_avg_3s=3.92484623731654`
+- `l2_error_avg_all=2.886814168679537`
+- `PDMS=0.9532377083160599`
+- `collision_rate_avg_all=0.0`
+- `C=1.0`, `NC=1.0`, `TTC=1.0`
+
+Metric interpretation:
+
+- The local `val_l2_avg=3.919460` corresponds to the official 3-second metric (`l2_error_avg_3s=3.924846`), not the Table-style all-horizon average.
+- The Table-style headline for this run is `l2_error_avg_all=2.886814`.
+- Compared with the no-Q8 clean ridge branch (`official l2_error_avg_all=11.853387`), Q8 prompt-context features reduce validation error substantially.
+- Compared with the remembered V2V-GoT Q9 reference (`2.62m`), this checkpoint is close but still worse: `2.886814m`.
+
+Artifacts:
+
+- run root: `outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_q8context_ridge_v1_withq8feat`
+- consolidated manifest: `outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_q8context_ridge_v1_withq8feat/gmark_q9_q8context_ridge_v1_withq8feat_consolidated_manifest.json`
+- official export manifest: `outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_q8context_ridge_v1_withq8feat/gmark_q9_q8context_ridge_v1_withq8feat_ridge_official_exports/gmark_q9_q8context_ridge_v1_withq8feat_ridge_official_export_manifest.json`
+- official eval summary JSON: `outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_q8context_ridge_v1_withq8feat/gmark_q9_q8context_ridge_v1_withq8feat_ridge_official_eval_reports/gmark_q9_q8context_ridge_v1_withq8feat_ridge_official_export_manifest_official_qa_eval_summary.json`
+- official eval summary Markdown: `outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_q8context_ridge_v1_withq8feat/gmark_q9_q8context_ridge_v1_withq8feat_ridge_official_eval_reports/gmark_q9_q8context_ridge_v1_withq8feat_ridge_official_export_manifest_official_qa_eval_summary.md`
+
+ElasticNet follow-up:
+
+- run name: `gmark_q9_q8context_elasticnet_v1_withq8feat`
+- model: `elasticnet`
+- protocol label: **Q9 + provided Q8 prompt context**
+- official metrics:
+  - `l2_error_avg_1s=1.823044394702993`
+  - `l2_error_avg_2s=2.9093408591957775`
+  - `l2_error_avg_3s=3.9207553504543937`
+  - `l2_error_avg_all=2.8843802014510547`
+  - `PDMS=0.9489262913522926`
+  - `collision_rate_avg_all=0.0`
+  - `C=1.0`, `NC=1.0`, `TTC=1.0`
+- official export manifest: `outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_q8context_elasticnet_v1_withq8feat/gmark_q9_q8context_elasticnet_v1_withq8feat_elasticnet_official_exports/gmark_q9_q8context_elasticnet_v1_withq8feat_elasticnet_official_export_manifest.json`
+- official eval log: `outputs/v2vgot_table1_reproduction/gmark_q9_sweep/gmark_q9_q8context_elasticnet_v1_withq8feat/gmark_q9_q8context_elasticnet_v1_withq8feat_elasticnet_official_eval_reports/future_trajectory_qa_type_19_official_eval.log`
+- comparison to ridge:
+  - ElasticNet improves `l2_error_avg_all` from `2.886814168679537` to `2.8843802014510547`.
+  - The gain is small (`0.002434m` absolute), so treat ridge and ElasticNet as effectively tied unless later runs show a larger pattern.
+- comparison to V2V-GoT:
+  - V2V-GoT reported/reference Q9 `l2_error_avg_all=2.620000`.
+  - Current clean ElasticNet prompt-context Q9 is `0.264380m` worse, about `10.09%` above the reference error.
+- RF follow-up:
+  - RF underperformed the linear baselines locally (`val_l2_avg=5.2500`; `1s=3.7633`, `2s=4.5215`, `3s=5.2500`).
+  - Next work should focus on richer KG-derived features and/or smoother nonlinear tabular models rather than plain RF.
+
+v2 feature-ablation update (official metrics):
+
+- `gmark_q9_v2_context_only_elasticnet`: `l2_error_avg_all=2.8843802014510547` (matches prior clean best)
+- `gmark_q9_v2_kgsubset_elasticnet`: `l2_error_avg_all=6.181112923881373`
+- `gmark_q9_v2_context_plus_kgsubset_elasticnet`: `l2_error_avg_all=3.3317519194973264`
+
+Decision:
+
+- Freeze `context-only ElasticNet` as the active clean Q9 baseline for now.
+- Treat current KG-control feature append strategy as experimental (not baseline-promoting) until it shows consistent gains.
+
+New model-family path:
+
+- `scripts/run_gmark_q9_model_sweep_v2.py` now supports `--models hgb` (HistGradientBoosting + MultiOutputRegressor) under the same clean feature protocol.
+
+Model-family sweep closure:
+
+- Active clean baseline remains `context-only ElasticNet` with official `l2_error_avg_all=2.8843802014510547`.
+- Broader model-family attempts in this phase (`rf`, `hgb`, `mlp`, `xgb`) did not exceed the frozen baseline in current runs.
+- Next iteration focus shifts from model-family expansion to feature diagnostics and feature-quality refinement.
+
+Q8-output feature ablations (latest):
+
+- `gmark_q9_v2_context_elasticnet_q8float_r5_v1`:
+  - kept Q8 one-hot labels and replaced only the last 2 Q8 columns with split-correct Q8 float values
+  - official `l2_error_avg_all=2.9858321342385437` (worse than baseline `2.8843802014510547`)
+- `gmark_q9_v2_context_elasticnet_q8probs14_r5_v1`:
+  - used richer Q8 probability/margin-derived context block (`model_probs14`)
+  - official `l2_error_avg_all=5.208098302540332` (substantially worse than baseline)
+
+Net status:
+
+- Freeze remains `context-only ElasticNet` (`2.8843802014510547`) as active clean Q9 baseline.
+- Treat the above Q8-output variants as negative ablations for this phase.
+
+Feature details:
+
+- 14 base Q9 geometry/context features.
+- 12 appended Q8-context numeric features:
+  - 5 one-hot speed labels: `fast`, `moderate`, `slow`, `very slow`, `stop`
+  - 5 one-hot steering labels: `left`, `slightly left`, `straight`, `slightly right`, `right`
+  - `q8_pred_speed_control_value`
+  - `q8_pred_steering_control_value`
+- Example for `moderate` + `straight`:
+  - appended vector: `[0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0.65, 0.0]`
+
+Cleanliness/caveat:
+
+- This run avoids direct benchmark metadata fields previously flagged as leakage-risk: `dist`, `angle`, `suggested_speed_idx`, `suggested_steering_idx`, `future_trajectory_str_in_ego`, `future_trajectory_str_in_self`.
+- It does use the Q8 answer context included in the Q9 prompt. That is valid for a V2V-GoT-style staged Q8 -> Q9 prompt setting, but should not be presented as strict end-to-end Q8 model prediction unless the Q8 context is generated by our Q8 model at inference time.
+
+Older Q9 note:
+
+- The older `control_metadata_linear_v1` and `control_metadata_linear_tail_residual_v1` Q9 results below are retained as historical/legacy checkpoints.
+- Because they used target-adjacent control metadata such as `dist`, `angle`, and `suggested_*` fields, they should not be used as the clean paper-facing Q9 result without an explicit methodology caveat.
 
 Aim:
 

@@ -6,8 +6,10 @@ import argparse
 import json
 import math
 import re
+import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,12 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from kg_coop_drive.application.control_settings_policy import (  # noqa: E402
+    SPEED_CLASSES,
+    STEERING_CLASSES,
+    decide_control_settings,
+)
+from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
 from kg_coop_drive.domain.benchmark import BenchmarkSample, BenchmarkTaskType  # noqa: E402
 from kg_coop_drive.infrastructure.v2vgot_benchmark_adapter import V2VGoTQABenchmarkAdapter  # noqa: E402
 
@@ -44,8 +52,22 @@ COORD_RE = re.compile(r"\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)")
 SPEED_LABEL_RE = re.compile(r"suggested speed setting is:\s*([^.]+)\.", re.IGNORECASE)
 STEER_LABEL_RE = re.compile(r"suggested steering setting is:\s*([^.]+)\.", re.IGNORECASE)
 
-SPEED_LABELS = ("stop", "slow", "normal", "fast")
-STEER_LABELS = ("hard left", "left", "straight", "right", "hard right")
+SPEED_LABELS = tuple(SPEED_CLASSES)
+STEER_LABELS = tuple(STEERING_CLASSES)
+Q8_SPEED_CONTROL_VALUES = {
+    "fast": 1.0,
+    "moderate": 0.65,
+    "slow": 0.35,
+    "very slow": 0.15,
+    "stop": 0.0,
+}
+Q8_STEERING_CONTROL_VALUES = {
+    "left": -1.0,
+    "slightly left": -0.5,
+    "straight": 0.0,
+    "slightly right": 0.5,
+    "right": 1.0,
+}
 
 
 @dataclass(frozen=True)
@@ -83,7 +105,40 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--progress-every", type=int, default=250)
     parser.add_argument("--models", nargs="+", default=("ridge", "elasticnet", "rf"))
     parser.add_argument("--include-q8-pred-features", action="store_true")
+    parser.add_argument(
+        "--q8-feature-source",
+        default="question_context",
+        choices=("question_context", "q8_model", "legacy_jsonl"),
+        help=(
+            "Q8 feature source. question_context parses the Q8 context already "
+            "present in the Q9 prompt; q8_model rebuilds KG scenes and reruns "
+            "the Q8 model; legacy_jsonl reads --q8-predictions-jsonl."
+        ),
+    )
     parser.add_argument("--q8-predictions-jsonl", default="")
+    parser.add_argument(
+        "--q8-model-json",
+        default="",
+        help=(
+            "Q8 model JSON used only when --q8-feature-source=q8_model. That path "
+            "rebuilds KG-prepared train/val scenes and reruns Q8 inference."
+        ),
+    )
+    parser.add_argument(
+        "--q8-feature-timeout-seconds",
+        type=int,
+        default=0,
+        help=(
+            "If >0, skips one Q8 feature row with zero/default features after "
+            "this many seconds. Useful for debugging pathological KG rows."
+        ),
+    )
+    parser.add_argument(
+        "--q8-feature-debug-every",
+        type=int,
+        default=0,
+        help="If >0, logs the Q8 feature sample before processing every N rows.",
+    )
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--run-official-eval", action="store_true")
     return parser
@@ -188,6 +243,11 @@ def trajectory_geometry_features(sample: BenchmarkSample) -> list[float]:
 
 
 def parse_q8_label_features(answer_text: str) -> list[float]:
+    speed, steer = parse_q8_labels(answer_text)
+    return q8_label_features(speed_label=speed, steering_label=steer)
+
+
+def parse_q8_labels(answer_text: str) -> tuple[str, str]:
     speed = ""
     steer = ""
     speed_match = SPEED_LABEL_RE.search(answer_text)
@@ -196,9 +256,34 @@ def parse_q8_label_features(answer_text: str) -> list[float]:
         speed = speed_match.group(1).strip().lower()
     if steer_match:
         steer = steer_match.group(1).strip().lower()
-    speed_one_hot = [1.0 if label in speed else 0.0 for label in SPEED_LABELS]
-    steer_one_hot = [1.0 if label in steer else 0.0 for label in STEER_LABELS]
-    return speed_one_hot + steer_one_hot
+    return speed, steer
+
+
+def q8_label_features(*, speed_label: str, steering_label: str) -> list[float]:
+    speed = speed_label.strip().lower()
+    steer = steering_label.strip().lower()
+    speed_one_hot = [1.0 if label == speed else 0.0 for label in SPEED_LABELS]
+    steer_one_hot = [1.0 if label == steer else 0.0 for label in STEER_LABELS]
+    return (
+        speed_one_hot
+        + steer_one_hot
+        + [
+            Q8_SPEED_CONTROL_VALUES.get(speed, 0.0),
+            Q8_STEERING_CONTROL_VALUES.get(steer, 0.0),
+        ]
+    )
+
+
+def q8_feature_width() -> int:
+    return len(SPEED_LABELS) + len(STEER_LABELS) + 2
+
+
+def q8_label_indices(*, speed_label: str, steering_label: str) -> tuple[int, int]:
+    speed = speed_label.strip().lower()
+    steer = steering_label.strip().lower()
+    speed_idx = SPEED_LABELS.index(speed) if speed in SPEED_LABELS else -1
+    steering_idx = STEER_LABELS.index(steer) if steer in STEER_LABELS else -1
+    return speed_idx, steering_idx
 
 
 def load_q8_prediction_lookup(path: str) -> dict[str, list[float]]:
@@ -217,6 +302,269 @@ def load_q8_prediction_lookup(path: str) -> dict[str, list[float]]:
             if sample_id:
                 result[sample_id] = parse_q8_label_features(answer_text)
     return result
+
+
+def load_q8_model(path: str) -> dict[str, object]:
+    model_path = Path(path).expanduser()
+    if not model_path.exists():
+        raise FileNotFoundError(f"Q8 model file not found: {model_path}")
+    payload = json.loads(model_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid Q8 model JSON: {model_path}")
+    return payload
+
+
+class Q8FeatureTimeoutError(TimeoutError):
+    pass
+
+
+def _raise_q8_feature_timeout(signum: int, frame: object) -> None:
+    raise Q8FeatureTimeoutError("Q8 feature row timed out")
+
+
+def predict_q8_feature_row(
+    *,
+    sample: BenchmarkSample,
+    evaluator: V2VGoTQAPhase5AEvaluator,
+    q8_model: dict[str, object],
+) -> tuple[list[float], dict[str, object]]:
+    prepared_scene = evaluator.prepare_sample(sample=sample, baseline_mode="cooperative")
+    decision = decide_control_settings(
+        scene=prepared_scene,
+        selection_policy="linear_classifier",
+        model=q8_model,
+    )
+    speed_label = decision.speed_instruction.strip().lower()
+    steering_label = decision.steering_instruction.strip().lower()
+    speed_idx, steering_idx = q8_label_indices(
+        speed_label=speed_label,
+        steering_label=steering_label,
+    )
+    features = q8_label_features(
+        speed_label=speed_label,
+        steering_label=steering_label,
+    )
+    metadata = {
+        "q8_pred_speed_label": speed_label,
+        "q8_pred_speed_idx": speed_idx,
+        "q8_pred_steering_label": steering_label,
+        "q8_pred_steering_idx": steering_idx,
+        "q8_pred_object_ids": list(decision.object_ids),
+        "q8_feature_vector": features,
+        "q8_feature_status": "predicted",
+    }
+    return features, metadata
+
+
+def q8_metadata_from_labels(*, speed_label: str, steering_label: str, status: str) -> tuple[list[float], dict[str, object]]:
+    speed_idx, steering_idx = q8_label_indices(
+        speed_label=speed_label,
+        steering_label=steering_label,
+    )
+    features = q8_label_features(
+        speed_label=speed_label,
+        steering_label=steering_label,
+    )
+    metadata = {
+        "q8_pred_speed_label": speed_label,
+        "q8_pred_speed_idx": speed_idx,
+        "q8_pred_steering_label": steering_label,
+        "q8_pred_steering_idx": steering_idx,
+        "q8_pred_object_ids": [],
+        "q8_feature_vector": features,
+        "q8_feature_status": status,
+    }
+    return features, metadata
+
+
+def write_q8_feature_jsonl_row(
+    *,
+    handle: Any,
+    sample: BenchmarkSample,
+    elapsed: float,
+    prediction_metadata: dict[str, object],
+) -> None:
+    handle.write(
+        json.dumps(
+            {
+                "sample_id": sample.sample_id,
+                "split_name": sample.split_name,
+                "file_name": sample.file_name,
+                "scenario_index": sample.raw_record.get("scenario_index"),
+                "global_timestamp_index": sample.raw_record.get("global_timestamp_index"),
+                "local_timestamp_index": sample.raw_record.get("local_timestamp_index"),
+                "asker_cav_id": sample.raw_record.get("asker_cav_id"),
+                "q8_feature_elapsed_seconds": round(elapsed, 6),
+                **prediction_metadata,
+            }
+        )
+        + "\n"
+    )
+    handle.flush()
+
+
+def update_q8_counts(
+    *,
+    prediction_metadata: dict[str, object],
+    speed_counts: dict[str, int],
+    steering_counts: dict[str, int],
+) -> None:
+    speed_label = str(prediction_metadata["q8_pred_speed_label"])
+    steering_label = str(prediction_metadata["q8_pred_steering_label"])
+    if speed_label in speed_counts:
+        speed_counts[speed_label] += 1
+    if steering_label in steering_counts:
+        steering_counts[steering_label] += 1
+
+
+def build_q8_prediction_lookup_from_question_context(
+    *,
+    samples: tuple[BenchmarkSample, ...],
+    output_jsonl: Path,
+    progress_every: int,
+) -> dict[str, list[float]]:
+    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    lookup: dict[str, list[float]] = {}
+    speed_counts = {label: 0 for label in SPEED_LABELS}
+    steering_counts = {label: 0 for label in STEER_LABELS}
+    total = len(samples)
+    with output_jsonl.open("w", encoding="utf-8") as handle:
+        for idx, sample in enumerate(samples, start=1):
+            started_at = time.monotonic()
+            speed_label, steering_label = parse_q8_labels(sample.scene.raw_question)
+            features, prediction_metadata = q8_metadata_from_labels(
+                speed_label=speed_label,
+                steering_label=steering_label,
+                status="parsed_from_q9_question_context",
+            )
+            elapsed = time.monotonic() - started_at
+            lookup[sample.sample_id] = features
+            update_q8_counts(
+                prediction_metadata=prediction_metadata,
+                speed_counts=speed_counts,
+                steering_counts=steering_counts,
+            )
+            write_q8_feature_jsonl_row(
+                handle=handle,
+                sample=sample,
+                elapsed=elapsed,
+                prediction_metadata=prediction_metadata,
+            )
+            if progress_every > 0 and (idx == 1 or idx % progress_every == 0 or idx == total):
+                print(
+                    f"q8_context_feature_progress: {sample.split_name} {idx}/{total} "
+                    f"last_sample_id={sample.sample_id}",
+                    flush=True,
+                )
+    print(
+        "[INFO] Q8 question-context features ready: "
+        f"split={samples[0].split_name if samples else 'unknown'} rows={len(lookup)} "
+        f"speed_counts={speed_counts} steering_counts={steering_counts}",
+        flush=True,
+    )
+    return lookup
+
+
+def build_q8_prediction_lookup_from_model(
+    *,
+    samples: tuple[BenchmarkSample, ...],
+    evaluator: V2VGoTQAPhase5AEvaluator,
+    q8_model: dict[str, object],
+    output_jsonl: Path,
+    progress_every: int,
+    timeout_seconds: int,
+    debug_every: int,
+) -> dict[str, list[float]]:
+    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    lookup: dict[str, list[float]] = {}
+    speed_counts = {label: 0 for label in SPEED_LABELS}
+    steering_counts = {label: 0 for label in STEER_LABELS}
+    total = len(samples)
+    with output_jsonl.open("w", encoding="utf-8") as handle:
+        for idx, sample in enumerate(samples, start=1):
+            if debug_every > 0 and (idx == 1 or idx % debug_every == 0):
+                print(
+                    "q8_feature_start: "
+                    f"{sample.split_name} {idx}/{total} sample_id={sample.sample_id} "
+                    f"scenario={sample.raw_record.get('scenario_index')} "
+                    f"global_ts={sample.raw_record.get('global_timestamp_index')} "
+                    f"asker={sample.raw_record.get('asker_cav_id')}",
+                    flush=True,
+                )
+            started_at = time.monotonic()
+            timed_out = False
+            if timeout_seconds > 0:
+                previous_handler = signal.signal(signal.SIGALRM, _raise_q8_feature_timeout)
+                signal.alarm(timeout_seconds)
+            else:
+                previous_handler = None
+            try:
+                features, prediction_metadata = predict_q8_feature_row(
+                    sample=sample,
+                    evaluator=evaluator,
+                    q8_model=q8_model,
+                )
+            except Q8FeatureTimeoutError:
+                timed_out = True
+                features = [0.0] * q8_feature_width()
+                prediction_metadata = {
+                    "q8_pred_speed_label": "",
+                    "q8_pred_speed_idx": -1,
+                    "q8_pred_steering_label": "",
+                    "q8_pred_steering_idx": -1,
+                    "q8_pred_object_ids": [],
+                    "q8_feature_vector": features,
+                    "q8_feature_status": f"timeout_after_{timeout_seconds}s",
+                }
+            finally:
+                if timeout_seconds > 0:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, previous_handler)
+            elapsed = time.monotonic() - started_at
+            lookup[sample.sample_id] = features
+            speed_label = str(prediction_metadata["q8_pred_speed_label"])
+            steering_label = str(prediction_metadata["q8_pred_steering_label"])
+            if speed_label in speed_counts:
+                speed_counts[speed_label] += 1
+            if steering_label in steering_counts:
+                steering_counts[steering_label] += 1
+            if timed_out or (debug_every > 0 and (idx == 1 or idx % debug_every == 0)):
+                print(
+                    "q8_feature_done: "
+                    f"{sample.split_name} {idx}/{total} sample_id={sample.sample_id} "
+                    f"elapsed={elapsed:.3f}s status={prediction_metadata['q8_feature_status']}",
+                    flush=True,
+                )
+            handle.write(
+                json.dumps(
+                    {
+                        "sample_id": sample.sample_id,
+                        "split_name": sample.split_name,
+                        "file_name": sample.file_name,
+                        "scenario_index": sample.raw_record.get("scenario_index"),
+                        "global_timestamp_index": sample.raw_record.get("global_timestamp_index"),
+                        "local_timestamp_index": sample.raw_record.get("local_timestamp_index"),
+                        "asker_cav_id": sample.raw_record.get("asker_cav_id"),
+                        "q8_feature_elapsed_seconds": round(elapsed, 6),
+                        **prediction_metadata,
+                    }
+                )
+                + "\n"
+            )
+            handle.flush()
+            if progress_every > 0 and (idx == 1 or idx % progress_every == 0 or idx == total):
+                print(
+                    f"q8_feature_progress: {sample.split_name} {idx}/{total} "
+                    f"last_sample_id={sample.sample_id} elapsed={elapsed:.3f}s",
+                    flush=True,
+                )
+    print(
+        "[INFO] Q8 model features ready: "
+        f"split={samples[0].split_name if samples else 'unknown'} rows={len(lookup)} "
+        f"speed_counts={speed_counts} steering_counts={steering_counts}",
+        flush=True,
+    )
+    return lookup
 
 
 def feature_names(include_q8_pred_features: bool) -> list[str]:
@@ -240,6 +588,10 @@ def feature_names(include_q8_pred_features: bool) -> list[str]:
         names.extend(
             [f"q8_speed_{label.replace(' ', '_')}" for label in SPEED_LABELS]
             + [f"q8_steer_{label.replace(' ', '_')}" for label in STEER_LABELS]
+            + [
+                "q8_pred_speed_control_value",
+                "q8_pred_steering_control_value",
+            ]
         )
     return names
 
@@ -257,7 +609,7 @@ def build_feature_row(
     row = [1.0, current_x, current_y, asker_is_cav1]
     row.extend(trajectory_geometry_features(sample))
     if include_q8_pred_features:
-        row.extend(q8_lookup.get(sample.sample_id, [0.0] * (len(SPEED_LABELS) + len(STEER_LABELS))))
+        row.extend(q8_lookup.get(sample.sample_id, [0.0] * q8_feature_width()))
     return row
 
 
@@ -599,23 +951,105 @@ def main() -> int:
         if not train_samples:
             raise ValueError("All train samples were removed by train/val overlap filtering.")
 
-    q8_lookup: dict[str, list[float]] = {}
+    q8_train_lookup: dict[str, list[float]] = {}
+    q8_val_lookup: dict[str, list[float]] = {}
+    q8_feature_source: dict[str, object] | None = None
     if args.include_q8_pred_features:
-        if not args.q8_predictions_jsonl:
-            raise ValueError("--include-q8-pred-features requires --q8-predictions-jsonl.")
-        q8_lookup = load_q8_prediction_lookup(args.q8_predictions_jsonl)
-        print(f"[INFO] Loaded Q8 prediction features for {len(q8_lookup)} samples.", flush=True)
+        if args.q8_feature_source == "question_context":
+            q8_feature_dir = run_root / "q8_question_context_features"
+            q8_train_jsonl = q8_feature_dir / f"{args.run_name}_q8_context_features_train.jsonl"
+            q8_val_jsonl = q8_feature_dir / f"{args.run_name}_q8_context_features_val.jsonl"
+            print("[INFO] Building Q8 features from Q9 question context.", flush=True)
+            q8_train_lookup = build_q8_prediction_lookup_from_question_context(
+                samples=train_samples,
+                output_jsonl=q8_train_jsonl,
+                progress_every=args.progress_every,
+            )
+            q8_val_lookup = build_q8_prediction_lookup_from_question_context(
+                samples=val_samples,
+                output_jsonl=q8_val_jsonl,
+                progress_every=args.progress_every,
+            )
+            q8_feature_source = {
+                "mode": "question_context",
+                "train_q8_features_jsonl": str(q8_train_jsonl),
+                "val_q8_features_jsonl": str(q8_val_jsonl),
+                "note": (
+                    "Q8 controls are parsed from the speed/steering context already "
+                    "present in the V2V-GoT Q9 prompt. This avoids rerunning KG/Q8 "
+                    "feature generation and matches the staged Q8->Q9 prompt input."
+                ),
+            }
+        elif args.q8_feature_source == "q8_model" and args.q8_model_json:
+            q8_model_path = str(Path(args.q8_model_json).expanduser().resolve())
+            q8_model = load_q8_model(q8_model_path)
+            evaluator = V2VGoTQAPhase5AEvaluator(str(Path(args.v2vgot_root).expanduser().resolve()))
+            q8_feature_dir = run_root / "q8_model_features"
+            q8_train_jsonl = q8_feature_dir / f"{args.run_name}_q8_features_train.jsonl"
+            q8_val_jsonl = q8_feature_dir / f"{args.run_name}_q8_features_val.jsonl"
+            print(f"[INFO] Building split-correct Q8 model features from {q8_model_path}", flush=True)
+            q8_train_lookup = build_q8_prediction_lookup_from_model(
+                samples=train_samples,
+                evaluator=evaluator,
+                q8_model=q8_model,
+                output_jsonl=q8_train_jsonl,
+                progress_every=args.progress_every,
+                timeout_seconds=args.q8_feature_timeout_seconds,
+                debug_every=args.q8_feature_debug_every,
+            )
+            q8_val_lookup = build_q8_prediction_lookup_from_model(
+                samples=val_samples,
+                evaluator=evaluator,
+                q8_model=q8_model,
+                output_jsonl=q8_val_jsonl,
+                progress_every=args.progress_every,
+                timeout_seconds=args.q8_feature_timeout_seconds,
+                debug_every=args.q8_feature_debug_every,
+            )
+            q8_feature_source = {
+                "mode": "q8_model_json",
+                "q8_model_json": q8_model_path,
+                "train_q8_features_jsonl": str(q8_train_jsonl),
+                "val_q8_features_jsonl": str(q8_val_jsonl),
+                "q8_feature_timeout_seconds": args.q8_feature_timeout_seconds,
+                "q8_feature_debug_every": args.q8_feature_debug_every,
+                "note": (
+                    "Q8 controls are predicted from KG-prepared scenes separately "
+                    "for train and val, matching V2V-GoT staged Q8->Q9 context."
+                ),
+            }
+        elif args.q8_feature_source == "legacy_jsonl" and args.q8_predictions_jsonl:
+            q8_lookup = load_q8_prediction_lookup(args.q8_predictions_jsonl)
+            q8_train_lookup = q8_lookup
+            q8_val_lookup = q8_lookup
+            q8_feature_source = {
+                "mode": "q8_predictions_jsonl_legacy_shared_lookup",
+                "q8_predictions_jsonl": args.q8_predictions_jsonl,
+                "note": (
+                    "Legacy shared lookup. Prefer --q8-model-json so train and val "
+                    "Q8 features are generated from their own splits, or prefer "
+                    "--q8-feature-source=question_context to reuse the staged Q8 "
+                    "context already present in the Q9 prompt."
+                ),
+            }
+            print(f"[INFO] Loaded legacy Q8 prediction features for {len(q8_lookup)} samples.", flush=True)
+        else:
+            raise ValueError(
+                "--include-q8-pred-features requires a valid --q8-feature-source: "
+                "question_context, q8_model with --q8-model-json, or legacy_jsonl "
+                "with --q8-predictions-jsonl."
+            )
 
     x_train, y_train, usable_train = build_xy(
         train_samples,
         include_q8_pred_features=args.include_q8_pred_features,
-        q8_lookup=q8_lookup,
+        q8_lookup=q8_train_lookup,
         progress_every=args.progress_every,
     )
     x_val, y_val, usable_val = build_xy(
         val_samples,
         include_q8_pred_features=args.include_q8_pred_features,
-        q8_lookup=q8_lookup,
+        q8_lookup=q8_val_lookup,
         progress_every=args.progress_every,
     )
     print(
@@ -678,7 +1112,7 @@ def main() -> int:
                     "future_trajectory_str_in_ego",
                     "future_trajectory_str_in_self",
                 ],
-                "q8_pred_feature_source": args.q8_predictions_jsonl if args.include_q8_pred_features else None,
+                "q8_pred_feature_source": q8_feature_source,
             },
         }
         model_json.write_text(json.dumps(model_record, indent=2), encoding="utf-8")
@@ -734,7 +1168,7 @@ def main() -> int:
         "train_file_name": args.train_file_name,
         "val_file_name": args.val_file_name,
         "include_q8_pred_features": bool(args.include_q8_pred_features),
-        "q8_predictions_jsonl": args.q8_predictions_jsonl if args.include_q8_pred_features else "",
+        "q8_feature_source": q8_feature_source,
         "train_rows": len(train_samples),
         "val_rows": len(val_samples),
         "models": [

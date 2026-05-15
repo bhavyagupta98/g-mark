@@ -15,8 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Wrapper for clean Q9 sweep: generate Q8 predictions from a trained Q8 model, "
-            "then run Q9 sweep with optional Q8-derived features."
+            "Wrapper for clean Q9 sweep: run no-Q8 and Q8-derived feature branches. "
+            "By default, Q8 features are parsed from the Q9 prompt context."
         )
     )
     parser.add_argument("--run-name", required=True)
@@ -34,12 +34,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--q8-file-name",
         default="v2v4real_3d_grounding_qa_dataset_v2vgot.json",
         help=(
-            "QA JSON used to generate Q8 predictions. Keep this as the general "
-            "val QA file; the released nq9 file is Q9-only and has no Q8 rows."
+            "Retained for compatibility with older wrapper manifests. The current "
+            "Q8-feature branch passes --q8-model-json to the Q9 sweep and builds "
+            "split-correct Q8 features directly from Q9 train/val samples."
         ),
     )
     parser.add_argument("--models", nargs="+", default=("ridge", "elasticnet", "rf"))
     parser.add_argument("--progress-every", type=int, default=250)
+    parser.add_argument(
+        "--q8-feature-source",
+        default="question_context",
+        choices=("question_context", "q8_model", "legacy_jsonl"),
+        help=(
+            "Q8 feature source for Q9. question_context parses Q8 context from "
+            "the Q9 prompt and avoids rerunning KG/Q8 inference."
+        ),
+    )
+    parser.add_argument("--q8-feature-timeout-seconds", type=int, default=0)
+    parser.add_argument("--q8-feature-debug-every", type=int, default=0)
     parser.add_argument("--limit-train", type=int, default=0)
     parser.add_argument("--limit-val", type=int, default=0)
     parser.add_argument("--allow-train-val-overlap", action="store_true")
@@ -111,44 +123,7 @@ def main() -> int:
         print("[INFO] Completed no-Q8-feature branch only.", flush=True)
         return 0
 
-    q8_model_json = resolve_q8_model_json(args)
-    q8_scenario = f"{args.run_name}_q8_pred_for_q9"
-    q8_output_root = run_root / "q8_predictions"
-    q8_output_root.mkdir(parents=True, exist_ok=True)
-    q8_prediction_jsonl = q8_output_root / f"{q8_scenario}.jsonl"
-
-    run(
-        [
-            args.python,
-            "scripts/run_qa_split_pipeline.py",
-            "--purpose",
-            "val_report",
-            "--split",
-            "val",
-            "--task-type",
-            "control_settings",
-            "--scenario-name",
-            q8_scenario,
-            "--file-name",
-            args.q8_file_name,
-            "--baseline-mode",
-            "cooperative",
-            "--control-selection-policy",
-            "linear_classifier",
-            "--control-model-json",
-            q8_model_json,
-            "--output-root",
-            str(q8_output_root),
-            "--v2vgot-root",
-            args.v2vgot_root,
-            "--progress-every",
-            str(args.progress_every),
-            "--skip-official-eval",
-        ]
-    )
-    if not q8_prediction_jsonl.exists():
-        raise FileNotFoundError(f"Expected Q8 predictions not found: {q8_prediction_jsonl}")
-
+    q8_model_json = resolve_q8_model_json(args) if args.q8_feature_source == "q8_model" else ""
     q8_sweep = [
         args.python,
         "scripts/run_gmark_q9_model_sweep.py",
@@ -169,9 +144,15 @@ def main() -> int:
         "--models",
         *args.models,
         "--include-q8-pred-features",
-        "--q8-predictions-jsonl",
-        str(q8_prediction_jsonl),
+        "--q8-feature-source",
+        args.q8_feature_source,
     ]
+    if q8_model_json:
+        q8_sweep.extend(["--q8-model-json", q8_model_json])
+    if args.q8_feature_timeout_seconds > 0:
+        q8_sweep.extend(["--q8-feature-timeout-seconds", str(args.q8_feature_timeout_seconds)])
+    if args.q8_feature_debug_every > 0:
+        q8_sweep.extend(["--q8-feature-debug-every", str(args.q8_feature_debug_every)])
     if args.allow_train_val_overlap:
         q8_sweep.append("--allow-train-val-overlap")
     if args.run_official_eval:
@@ -182,7 +163,7 @@ def main() -> int:
         "run_name": args.run_name,
         "output_root": str(output_root),
         "q8_model_json": q8_model_json,
-        "q8_prediction_jsonl": str(q8_prediction_jsonl),
+        "q8_feature_source": args.q8_feature_source,
         "branches": {
             "no_q8_features_run_name": f"{args.run_name}_noq8feat",
             "with_q8_features_run_name": f"{args.run_name}_withq8feat",
