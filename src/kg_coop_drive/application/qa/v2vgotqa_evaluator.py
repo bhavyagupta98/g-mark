@@ -3,12 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from kg_coop_drive.application.candidate_track_creator import CandidateTrackCreator
 from kg_coop_drive.application.candidate_track_resolver import CandidateTrackResolver
 from kg_coop_drive.application.cross_agent_associator import CrossAgentAssociator
 from kg_coop_drive.application.cross_agent_support_enricher import CrossAgentSupportEnricher
 from kg_coop_drive.application.observation_associator import ObservationAssociator
+from kg_coop_drive.application.qa.latency_profiling import (
+    EvaluationLatencyCollector,
+    SampleLatencyRecorder,
+)
 from kg_coop_drive.application.processed_scene_service import ProcessedSceneEnricher
 from kg_coop_drive.application.relation_builder import RelationBuilder
 from kg_coop_drive.application.temporal_track_manager import TemporalTrackManager
@@ -40,6 +45,13 @@ class GraphAblationMode(str, Enum):
     FLAT_NON_GRAPH_READOUT = "flat_non_graph_readout"
 
 
+class TemporalExecutionMode(str, Enum):
+    """Execution mode for temporal previous-frame loading."""
+
+    SERIAL = "serial"
+    PARALLEL_PREFETCH = "parallel_prefetch"
+
+
 @dataclass(frozen=True)
 class GraphAblationConfig:
     """Controls additive graph ablations without changing the default pipeline."""
@@ -62,6 +74,8 @@ class V2VGoTQAPhase5AEvaluator:
         router: V2VGoTQARouter | None = None,
         processed_loader: V2VGoTProcessedAssetLoader | None = None,
         graph_ablation: GraphAblationConfig | str | None = None,
+        temporal_execution_mode: TemporalExecutionMode | str = TemporalExecutionMode.SERIAL,
+        latency_collector: EvaluationLatencyCollector | None = None,
     ) -> None:
         self._router = router or V2VGoTQARouter()
         self._graph_ablation = (
@@ -69,10 +83,16 @@ class V2VGoTQAPhase5AEvaluator:
             if isinstance(graph_ablation, GraphAblationConfig)
             else GraphAblationConfig.from_value(graph_ablation or GraphAblationMode.FULL)
         )
+        self._temporal_execution_mode = (
+            temporal_execution_mode
+            if isinstance(temporal_execution_mode, TemporalExecutionMode)
+            else TemporalExecutionMode(str(temporal_execution_mode))
+        )
         self._processed_loader = processed_loader or V2VGoTProcessedAssetLoader(
             repository_root,
             asset_profile="cooperative",
         )
+        self._latency_collector = latency_collector
         self._processed_enricher = ProcessedSceneEnricher()
         self._observation_associator = ObservationAssociator()
         self._track_support_enricher = TrackSupportEnricher()
@@ -85,6 +105,11 @@ class V2VGoTQAPhase5AEvaluator:
         self._visibility_reasoner = VisibilityReasoner()
         self._relation_builder = RelationBuilder()
         self._temporal_track_manager = TemporalTrackManager()
+        self._temporal_prefetch_executor = (
+            ThreadPoolExecutor(max_workers=1)
+            if self._temporal_execution_mode == TemporalExecutionMode.PARALLEL_PREFETCH
+            else None
+        )
 
     def evaluate_samples(
         self,
@@ -97,12 +122,25 @@ class V2VGoTQAPhase5AEvaluator:
         predictions: list[BenchmarkPrediction] = []
         total_samples = len(samples)
         for index, sample in enumerate(samples, start=1):
-            prepared_scene = self.prepare_sample(
-                sample=sample,
-                baseline_mode=baseline_mode,
-            )
-            prepared_sample = replace(sample, scene=prepared_scene)
-            answer = self._router.answer(prepared_sample)
+            sample_recorder = self._start_sample_recorder(sample=sample, baseline_mode=baseline_mode)
+            if sample_recorder is not None:
+                with sample_recorder.measure("sample_total_ms"):
+                    prepared_scene = self.prepare_sample(
+                        sample=sample,
+                        baseline_mode=baseline_mode,
+                        sample_recorder=sample_recorder,
+                    )
+                    prepared_sample = replace(sample, scene=prepared_scene)
+                    with sample_recorder.measure("task_solver_answer_ms"):
+                        answer = self._router.answer(prepared_sample)
+            else:
+                prepared_scene = self.prepare_sample(
+                    sample=sample,
+                    baseline_mode=baseline_mode,
+                    sample_recorder=None,
+                )
+                prepared_sample = replace(sample, scene=prepared_scene)
+                answer = self._router.answer(prepared_sample)
             predictions.append(
                 BenchmarkPrediction(
                     sample_id=sample.sample_id,
@@ -116,6 +154,8 @@ class V2VGoTQAPhase5AEvaluator:
                     baseline_mode=baseline_mode,
                 )
             )
+            if sample_recorder is not None and self._latency_collector is not None:
+                self._latency_collector.finish_sample(sample_recorder)
             if progress_every > 0 and (index == 1 or index % progress_every == 0 or index == total_samples):
                 print(
                     f"progress: {index}/{total_samples} "
@@ -157,13 +197,21 @@ class V2VGoTQAPhase5AEvaluator:
         self,
         sample: BenchmarkSample,
         baseline_mode: str,
+        sample_recorder: SampleLatencyRecorder | None = None,
     ) -> CooperativeScene:
         """Prepare one benchmark sample scene for evaluation under one baseline mode."""
 
-        processed_data = self._processed_loader.load_frame_scene_data(
-            timestamp_index=sample.scene.global_timestamp_index,
-            split_name=sample.split_name,
-        )
+        if sample_recorder is not None:
+            with sample_recorder.measure("processed_asset_load_ms"):
+                processed_data = self._processed_loader.load_frame_scene_data(
+                    timestamp_index=sample.scene.global_timestamp_index,
+                    split_name=sample.split_name,
+                )
+        else:
+            processed_data = self._processed_loader.load_frame_scene_data(
+                timestamp_index=sample.scene.global_timestamp_index,
+                split_name=sample.split_name,
+            )
         if processed_data is None:
             return sample.scene
 
@@ -172,12 +220,17 @@ class V2VGoTQAPhase5AEvaluator:
             processed_data=processed_data,
             baseline_mode=baseline_mode,
         )
-        scene = self._prepare_single_frame_scene(sample.scene, processed_data)
+        previous_processed_data_future: Future[ProcessedFrameSceneData | None] | None = None
+        if self._temporal_execution_mode == TemporalExecutionMode.PARALLEL_PREFETCH:
+            previous_processed_data_future = self._start_temporal_previous_prefetch(sample)
+        scene = self._prepare_single_frame_scene(sample.scene, processed_data, sample_recorder=sample_recorder)
         if self._should_temporally_enrich(sample):
             scene = self._temporally_enrich_motion_scene(
                 sample=sample,
                 current_scene=scene,
                 baseline_mode=baseline_mode,
+                sample_recorder=sample_recorder,
+                previous_processed_data_future=previous_processed_data_future,
             )
         if baseline_mode == "ego_only":
             scene = self._keep_asker_visibility_only(scene)
@@ -187,47 +240,98 @@ class V2VGoTQAPhase5AEvaluator:
         self,
         scene: CooperativeScene,
         processed_data: ProcessedFrameSceneData,
+        sample_recorder: SampleLatencyRecorder | None = None,
     ) -> CooperativeScene:
-        scene = self._processed_enricher.enrich(scene, processed_data)
-        association_report = self._observation_associator.associate(scene, max_distance=3.0)
+        if sample_recorder is not None:
+            with sample_recorder.measure("local_graph_enrichment_ms"):
+                scene = self._processed_enricher.enrich(scene, processed_data)
+            with sample_recorder.measure("observation_association_ms"):
+                association_report = self._observation_associator.associate(scene, max_distance=3.0)
+        else:
+            scene = self._processed_enricher.enrich(scene, processed_data)
+            association_report = self._observation_associator.associate(scene, max_distance=3.0)
         if self._uses_provenance():
-            scene = self._track_support_enricher.enrich(scene, association_report)
+            if sample_recorder is not None:
+                with sample_recorder.measure("track_support_enrichment_ms"):
+                    scene = self._track_support_enricher.enrich(scene, association_report)
+            else:
+                scene = self._track_support_enricher.enrich(scene, association_report)
         else:
             scene = self._without_provenance(scene)
 
         if self._retains_candidates():
-            scene = self._candidate_track_creator.promote(scene, association_report)
-            scene, _candidate_resolution_report = self._candidate_track_resolver.resolve(
-                scene,
-                min_candidate_confidence=0.25,
-            )
+            if sample_recorder is not None:
+                with sample_recorder.measure("candidate_promotion_ms"):
+                    scene = self._candidate_track_creator.promote(scene, association_report)
+                with sample_recorder.measure("candidate_resolution_ms"):
+                    scene, _candidate_resolution_report = self._candidate_track_resolver.resolve(
+                        scene,
+                        min_candidate_confidence=0.25,
+                    )
+            else:
+                scene = self._candidate_track_creator.promote(scene, association_report)
+                scene, _candidate_resolution_report = self._candidate_track_resolver.resolve(
+                    scene,
+                    min_candidate_confidence=0.25,
+                )
             if not self._uses_provenance():
                 scene = self._without_provenance(scene)
 
-        cross_agent_report = self._cross_agent_associator.associate(scene, max_distance=3.0)
+        if sample_recorder is not None:
+            with sample_recorder.measure("cross_agent_association_ms"):
+                cross_agent_report = self._cross_agent_associator.associate(scene, max_distance=3.0)
+        else:
+            cross_agent_report = self._cross_agent_associator.associate(scene, max_distance=3.0)
         if self._uses_provenance():
-            scene, _cross_agent_support_report = self._cross_agent_support_enricher.enrich(
-                scene,
-                cross_agent_report,
-            )
+            if sample_recorder is not None:
+                with sample_recorder.measure("cross_agent_support_enrichment_ms"):
+                    scene, _cross_agent_support_report = self._cross_agent_support_enricher.enrich(
+                        scene,
+                        cross_agent_report,
+                    )
+            else:
+                scene, _cross_agent_support_report = self._cross_agent_support_enricher.enrich(
+                    scene,
+                    cross_agent_report,
+                )
         if self._retains_candidates():
-            scene, _track_merge_report = self._track_merger.merge(scene, max_distance=1.0)
+            if sample_recorder is not None:
+                with sample_recorder.measure("track_merge_ms"):
+                    scene, _track_merge_report = self._track_merger.merge(scene, max_distance=1.0)
+            else:
+                scene, _track_merge_report = self._track_merger.merge(scene, max_distance=1.0)
             if not self._uses_provenance():
                 scene = self._without_provenance(scene)
 
         if self._uses_uncertainty_conflict():
-            scene = self._track_quality_assessor.assess(scene)
+            if sample_recorder is not None:
+                with sample_recorder.measure("uncertainty_conflict_assessment_ms"):
+                    scene = self._track_quality_assessor.assess(scene)
+            else:
+                scene = self._track_quality_assessor.assess(scene)
         else:
             scene = self._without_uncertainty_conflict(scene)
 
         if self._infers_visibility():
-            scene, _visibility_reasoning_report = self._visibility_reasoner.infer(
-                scene,
-                uncertain_distance=30.0,
-                min_candidate_visible_confidence=0.5,
-            )
+            if sample_recorder is not None:
+                with sample_recorder.measure("visibility_inference_ms"):
+                    scene, _visibility_reasoning_report = self._visibility_reasoner.infer(
+                        scene,
+                        uncertain_distance=30.0,
+                        min_candidate_visible_confidence=0.5,
+                    )
+            else:
+                scene, _visibility_reasoning_report = self._visibility_reasoner.infer(
+                    scene,
+                    uncertain_distance=30.0,
+                    min_candidate_visible_confidence=0.5,
+                )
         if self._builds_graph_relations():
-            scene = self._relation_builder.build(scene)
+            if sample_recorder is not None:
+                with sample_recorder.measure("relation_build_ms"):
+                    scene = self._relation_builder.build(scene)
+            else:
+                scene = self._relation_builder.build(scene)
         return self._apply_graph_ablation(scene)
 
     def _temporally_enrich_motion_scene(
@@ -235,15 +339,31 @@ class V2VGoTQAPhase5AEvaluator:
         sample: BenchmarkSample,
         current_scene: CooperativeScene,
         baseline_mode: str,
+        sample_recorder: SampleLatencyRecorder | None = None,
+        previous_processed_data_future: Future[ProcessedFrameSceneData | None] | None = None,
     ) -> CooperativeScene:
         previous_timestamp_index = sample.scene.global_timestamp_index - 1
         if previous_timestamp_index < 0:
             return current_scene
 
-        previous_processed_data = self._processed_loader.load_frame_scene_data(
-            timestamp_index=previous_timestamp_index,
-            split_name=sample.split_name,
-        )
+        if previous_processed_data_future is not None:
+            if sample_recorder is not None:
+                with sample_recorder.measure("temporal_previous_asset_load_ms"):
+                    previous_processed_data = previous_processed_data_future.result()
+            else:
+                previous_processed_data = previous_processed_data_future.result()
+        else:
+            if sample_recorder is not None:
+                with sample_recorder.measure("temporal_previous_asset_load_ms"):
+                    previous_processed_data = self._processed_loader.load_frame_scene_data(
+                        timestamp_index=previous_timestamp_index,
+                        split_name=sample.split_name,
+                    )
+            else:
+                previous_processed_data = self._processed_loader.load_frame_scene_data(
+                    timestamp_index=previous_timestamp_index,
+                    split_name=sample.split_name,
+                )
         if previous_processed_data is None:
             return current_scene
 
@@ -260,22 +380,73 @@ class V2VGoTQAPhase5AEvaluator:
         previous_scene = self._prepare_single_frame_scene(
             previous_scene_seed,
             previous_processed_data,
+            sample_recorder=sample_recorder,
         )
-        temporal_scene, _temporal_report = self._temporal_track_manager.update(
-            previous_scene,
-            current_scene,
-            max_distance=8.0,
-            max_missed_frames=0,
-        )
+        if sample_recorder is not None:
+            with sample_recorder.measure("temporal_track_update_ms"):
+                temporal_scene, _temporal_report = self._temporal_track_manager.update(
+                    previous_scene,
+                    current_scene,
+                    max_distance=8.0,
+                    max_missed_frames=0,
+                )
+        else:
+            temporal_scene, _temporal_report = self._temporal_track_manager.update(
+                previous_scene,
+                current_scene,
+                max_distance=8.0,
+                max_missed_frames=0,
+            )
         if not self._uses_provenance():
             temporal_scene = self._without_provenance(temporal_scene)
         if self._uses_uncertainty_conflict():
-            temporal_scene = self._track_quality_assessor.assess(temporal_scene)
+            if sample_recorder is not None:
+                with sample_recorder.measure("temporal_uncertainty_conflict_assessment_ms"):
+                    temporal_scene = self._track_quality_assessor.assess(temporal_scene)
+            else:
+                temporal_scene = self._track_quality_assessor.assess(temporal_scene)
         else:
             temporal_scene = self._without_uncertainty_conflict(temporal_scene)
         if self._builds_graph_relations():
-            temporal_scene = self._relation_builder.build(temporal_scene)
+            if sample_recorder is not None:
+                with sample_recorder.measure("temporal_relation_build_ms"):
+                    temporal_scene = self._relation_builder.build(temporal_scene)
+            else:
+                temporal_scene = self._relation_builder.build(temporal_scene)
         return self._apply_graph_ablation(temporal_scene)
+
+    def _start_temporal_previous_prefetch(
+        self,
+        sample: BenchmarkSample,
+    ) -> Future[ProcessedFrameSceneData | None] | None:
+        if not self._should_temporally_enrich(sample):
+            return None
+        previous_timestamp_index = sample.scene.global_timestamp_index - 1
+        if previous_timestamp_index < 0:
+            return None
+        if self._temporal_prefetch_executor is None:
+            return None
+        return self._temporal_prefetch_executor.submit(
+            self._processed_loader.load_frame_scene_data,
+            timestamp_index=previous_timestamp_index,
+            split_name=sample.split_name,
+        )
+
+    def _start_sample_recorder(
+        self,
+        *,
+        sample: BenchmarkSample,
+        baseline_mode: str,
+    ) -> SampleLatencyRecorder | None:
+        if self._latency_collector is None:
+            return None
+        return self._latency_collector.start_sample(
+            sample_id=sample.sample_id,
+            split_name=sample.split_name,
+            task_type=sample.task_type.value,
+            qa_type_id=sample.qa_type_id,
+            baseline_mode=baseline_mode,
+        )
 
     def _uses_provenance(self) -> bool:
         return self._graph_ablation.mode not in {

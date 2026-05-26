@@ -1,0 +1,36 @@
+{
+  "repository_root": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+  "split": "train",
+  "file_name": "v2v4real_3d_grounding_qa_dataset_v2vgot.json",
+  "scenario_name": "latency_full_e2e_parallel_prefetch_20260519_q9_future_trajectory",
+  "task_types": [
+    "future_trajectory"
+  ],
+  "runs": [
+    {
+      "task_type": "future_trajectory",
+      "scenario_name": "latency_full_e2e_parallel_prefetch_20260519_q9_future_trajectory",
+      "file_name": "v2v4real_3d_grounding_qa_dataset_v2vgot.json",
+      "baseline_mode": "cooperative",
+      "graph_ablation_mode": "full",
+      "planning_ranker": "heuristic",
+      "planning_selection_policy": "default",
+      "planning_selection_source": "composition",
+      "planning_acceptor_model_json": "",
+      "future_trajectory_model_json": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/latency_analysis/latency_full_e2e_parallel_prefetch_20260519/q9_clean_model/latency_full_e2e_parallel_prefetch_20260519_q9_clean_model_clean_q9_model.json",
+      "object_motion_model_json": "",
+      "agent_motion_model_json": "",
+      "control_selection_policy": "rule",
+      "control_model_json": "",
+      "output_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_train_dev/latency_full_e2e_parallel_prefetch_20260519_q9_future_trajectory.jsonl",
+      "latency_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/latency_analysis/latency_full_e2e_parallel_prefetch_20260519/latency_full_e2e_parallel_prefetch_20260519_q9_future_trajectory_latency.jsonl",
+      "supported_predictions": 12290,
+      "unsupported_predictions": 0,
+      "total_samples": 12290,
+      "qa_type_ids": [
+        19
+      ],
+      "qa_type_id": 19
+    }
+  ]
+}

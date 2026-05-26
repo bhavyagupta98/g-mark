@@ -1,0 +1,27 @@
+{
+  "repository_root": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+  "split": "val",
+  "file_name": "v2v4real_3d_grounding_qa_dataset_nq9sm3w6dc.json",
+  "scenario_name": "latency_full_e2e_parallel_prefetch_20260519_q9_clean_model",
+  "task_types": [
+    "future_trajectory"
+  ],
+  "runs": [
+    {
+      "task_type": "future_trajectory",
+      "scenario_name": "latency_full_e2e_parallel_prefetch_20260519_q9_clean_model",
+      "file_name": "v2v4real_3d_grounding_qa_dataset_nq9sm3w6dc.json",
+      "baseline_mode": "cooperative",
+      "graph_ablation_mode": "full",
+      "future_trajectory_model_json": "clean_q9_no_oracle_metadata_inline",
+      "output_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/latency_analysis/latency_full_e2e_parallel_prefetch_20260519/q9_clean_model/latency_full_e2e_parallel_prefetch_20260519_q9_clean_model.jsonl",
+      "supported_predictions": 3446,
+      "unsupported_predictions": 0,
+      "total_samples": 3446,
+      "qa_type_ids": [
+        19
+      ],
+      "qa_type_id": 19
+    }
+  ]
+}

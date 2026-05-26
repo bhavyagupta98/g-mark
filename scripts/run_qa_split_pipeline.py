@@ -67,6 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=0, help="Use 0 for the full split.")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
     parser.add_argument(
+        "--temporal-execution-mode",
+        default="serial",
+        choices=("serial", "parallel_prefetch"),
+        help="Temporal execution mode. Default keeps existing serial behavior.",
+    )
+    parser.add_argument(
         "--graph-ablation-mode",
         default="full",
         choices=(
@@ -82,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-root",
         default="",
         help="Optional isolated output root. Defaults to outputs/phase8_<purpose>.",
+    )
+    parser.add_argument(
+        "--latency-jsonl",
+        default="",
+        help="Optional per-sample latency output path from evaluate_qa_router.",
     )
     parser.add_argument("--v2vgot-root", default="")
     parser.add_argument("--python", default=sys.executable)
@@ -188,6 +199,7 @@ def write_manifest(
     output_jsonl: Path,
     total_samples: int,
     qa_type_ids: list[int],
+    latency_jsonl: Path,
 ) -> None:
     manifest = {
         "repository_root": repository_root,
@@ -212,6 +224,7 @@ def write_manifest(
                 "control_selection_policy": control_selection_policy,
                 "control_model_json": control_model_json,
                 "output_jsonl": str(output_jsonl),
+                "latency_jsonl": str(latency_jsonl),
                 "supported_predictions": total_samples,
                 "unsupported_predictions": 0,
                 "total_samples": total_samples,
@@ -244,6 +257,9 @@ def main() -> None:
     if not output_root.is_absolute():
         output_root = (REPO_ROOT / output_root).resolve()
     prediction_path = output_root / f"{scenario}.jsonl"
+    latency_path = Path(args.latency_jsonl).expanduser() if args.latency_jsonl else (output_root / f"{scenario}_latency.jsonl")
+    if not latency_path.is_absolute():
+        latency_path = (REPO_ROOT / latency_path).resolve()
     manifest_path = output_root / f"{scenario}_manifest.json"
     official_dir = output_root / "official_exports"
     reports_dir = output_root / "official_eval_reports"
@@ -261,6 +277,8 @@ def main() -> None:
         args.task_type,
         "--baseline-mode",
         args.baseline_mode,
+        "--temporal-execution-mode",
+        args.temporal_execution_mode,
         "--graph-ablation-mode",
         args.graph_ablation_mode,
         "--planning-ranker",
@@ -289,6 +307,8 @@ def main() -> None:
         str(args.invisible_min_relative_to_best),
         "--output-jsonl",
         str(prediction_path),
+        "--latency-jsonl",
+        str(latency_path),
         "--file-name",
         args.file_name,
     ]
@@ -334,6 +354,7 @@ def main() -> None:
         output_jsonl=prediction_path,
         total_samples=total_samples,
         qa_type_ids=[int(value) for value in args.qa_type_ids],
+        latency_jsonl=latency_path,
     )
     print(f"saved_manifest: {manifest_path}")
 

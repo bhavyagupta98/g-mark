@@ -1,0 +1,18 @@
+{
+  "source_manifest": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_train_dev/latency_full_e2e_parallel_prefetch_20260519_q8_control_settings_manifest.json",
+  "repository_root": "/Users/bhavya/Desktop/ms_projects/V2V-GoT",
+  "split": "train",
+  "baseline_mode": "cooperative",
+  "scenario_name": "latency_full_e2e_parallel_prefetch_20260519_q8_control_settings",
+  "runs": [
+    {
+      "task_type": "control_settings",
+      "qa_type_id": 18,
+      "source_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_train_dev/latency_full_e2e_parallel_prefetch_20260519_q8_control_settings.jsonl",
+      "output_jsonl": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/phase8_train_dev/official_exports/control_settings_qa_type_18_latency_full_e2e_parallel_prefetch_20260519_q8_control_settings_official.jsonl",
+      "exported_count": 12290,
+      "missing_samples": 0,
+      "missing_objects": 0
+    }
+  ]
+}

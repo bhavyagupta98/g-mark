@@ -111,6 +111,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--q6-decision-threshold", type=float, default=Q6_E2E_TRAINING_DEFAULTS.decision_threshold)
     parser.add_argument(
+        "--q9-model-source",
+        default="clean_q8_context_elasticnet",
+        choices=("clean_q8_context_elasticnet",),
+        help=(
+            "Q9 model source. Uses the leak-safe Q8-context ElasticNet sweep path."
+        ),
+    )
+    parser.add_argument("--q9-train-file-name", default="v2v4real_3d_grounding_qa_dataset_v2vgot.json")
+    parser.add_argument("--q9-val-file-name", default="v2v4real_3d_grounding_qa_dataset_nq9sm3w6dc.json")
+    parser.add_argument(
         "--allow-val-features-during-training",
         action="store_true",
         help=(
@@ -266,6 +276,9 @@ def train_models(
     q6_gbdt_subsample: float,
     q6_gbdt_backend: str,
     q6_decision_threshold: float,
+    q9_model_source: str,
+    q9_train_file_name: str,
+    q9_val_file_name: str,
 ) -> dict[str, str]:
     features_dir = e2e_root / "features"
     models_dir = e2e_root / "models"
@@ -686,24 +699,44 @@ def train_models(
     print("\n" + "=" * 72)
     print("Step 7/8: Q9 model training")
     print("=" * 72)
-    q9_model = models_dir / "q9_future_trajectory_regressor_deployable.json"
-    q9_report = reports_dir / "q9_future_trajectory_regressor_report.json"
-    run(
-        [
-            sys.executable,
-            "scripts/train_q9_future_trajectory_regressor.py",
-            "--v2vgot-root",
-            v2vgot_root,
-            "--split",
-            "train",
-            "--model-family",
-            "linear_metadata_tail_residual",
-            "--output-json",
-            str(q9_model),
-            "--output-report",
-            str(q9_report),
-        ]
-    )
+    if q9_model_source == "clean_q8_context_elasticnet":
+        q9_run_name = "e2e_q9_clean_context_elasticnet"
+        q9_sweep_root = e2e_root / "q9_clean_sweep"
+        run(
+            [
+                sys.executable,
+                "scripts/run_gmark_q9_model_sweep.py",
+                "--run-name",
+                q9_run_name,
+                "--v2vgot-root",
+                v2vgot_root,
+                "--output-root",
+                str(q9_sweep_root),
+                "--train-file-name",
+                q9_train_file_name,
+                "--val-file-name",
+                q9_val_file_name,
+                "--models",
+                "elasticnet",
+                "--include-q8-pred-features",
+                "--q8-feature-source",
+                "question_context",
+                "--progress-every",
+                str(progress_every),
+            ]
+        )
+        q9_model = q9_sweep_root / q9_run_name / f"{q9_run_name}_elasticnet_model.json"
+        q9_report = reports_dir / "q9_clean_context_elasticnet_note.json"
+        write_json(
+            q9_report,
+            {
+                "q9_model_source": q9_model_source,
+                "model_json": str(q9_model),
+                "note": "Leak-safe Q9 sweep model using Q8 prompt-context features.",
+            },
+        )
+    else:
+        raise ValueError(f"Unsupported q9_model_source: {q9_model_source}")
 
     return {
         "q1_policy_json": str(q1_policy_path),
@@ -889,6 +922,7 @@ def main() -> int:
     print(f"q5_feature_set: {args.q5_feature_set}")
     print(f"q7_model_family: {args.q7_model_family}")
     print(f"q7_feature_set: {args.q7_feature_set}")
+    print(f"q9_model_source: {args.q9_model_source}")
     print("q6_weights_source: trained_during_e2e_run")
 
     model_paths = train_models(
@@ -922,6 +956,9 @@ def main() -> int:
         q6_gbdt_subsample=args.q6_gbdt_subsample,
         q6_gbdt_backend=args.q6_gbdt_backend,
         q6_decision_threshold=args.q6_decision_threshold,
+        q9_model_source=args.q9_model_source,
+        q9_train_file_name=args.q9_train_file_name,
+        q9_val_file_name=args.q9_val_file_name,
     )
     task_configs = build_train_task_configs(model_paths)
     train_runs = run_train_evals(
@@ -1007,7 +1044,10 @@ def main() -> int:
                 "planning_selection_source": "orchestrator",
             },
             "q8": {"control_selection_policy": "linear_classifier"},
-            "q9": {"future_trajectory_model_family": "linear_metadata_tail_residual"},
+            "q9": {
+                "future_trajectory_model_family": "clean_q8_context_elasticnet",
+                "q9_model_source": args.q9_model_source,
+            },
         },
         "train_runs": train_runs,
     }

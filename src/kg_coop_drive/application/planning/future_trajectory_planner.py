@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from math import cos, sin
+from math import atan2, cos, sin, sqrt
 
 from kg_coop_drive.domain.benchmark import BenchmarkSample
 from kg_coop_drive.domain.scene import Point2D
@@ -12,6 +12,7 @@ _POSITION_RE = re.compile(
     r"I am\s+(?P<agent>[A-Za-z0-9_]+)\s+at\s+"
     r"\((?P<x>-?\d+(?:\.\d+)?),\s*(?P<y>-?\d+(?:\.\d+)?)\)"
 )
+_COORD_RE = re.compile(r"\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)")
 _SPEED_RE = re.compile(r"suggested speed setting is:\s*(?P<label>[^.]+)", re.IGNORECASE)
 _STEERING_RE = re.compile(r"suggested steering setting is:\s*(?P<label>[^.]+)", re.IGNORECASE)
 
@@ -50,34 +51,39 @@ class ControlConditionedFutureTrajectoryPlanner:
         "right": -0.18,
         "hard right": -0.28,
     }
+    _speed_labels = ("fast", "moderate", "slow", "very slow", "stop")
+    _steering_labels = ("left", "slightly left", "straight", "slightly right", "right")
+    _q8_speed_control_values = {
+        "fast": 1.0,
+        "moderate": 0.65,
+        "slow": 0.35,
+        "very slow": 0.15,
+        "stop": 0.0,
+    }
+    _q8_steering_control_values = {
+        "left": -1.0,
+        "slightly left": -0.5,
+        "straight": 0.0,
+        "slightly right": 0.5,
+        "right": 1.0,
+    }
 
     def __init__(self, model: dict[str, object] | None = None, waypoint_count: int = 6) -> None:
-        self._model = model or {}
+        resolved_model = model or {}
+        if isinstance(resolved_model.get("model_payload"), dict):
+            payload = resolved_model.get("model_payload")
+            assert isinstance(payload, dict)
+            resolved_model = payload
+        self._model = resolved_model
         self._waypoint_count = waypoint_count
 
     def plan(self, sample: BenchmarkSample) -> FutureTrajectoryPlan:
         current = self._current_position(sample)
-        absolute_points = self._predict_absolute_points(sample)
-        if absolute_points:
-            source = (
-                "frozen_control_metadata_linear_tail_residual_model"
-                if self._model.get("model_type")
-                == "phase9_q9_control_metadata_linear_tail_residual_v1"
-                else "frozen_control_metadata_linear_model"
-            )
+        clean_points = self._predict_clean_linear_points(sample)
+        if clean_points:
             return FutureTrajectoryPlan(
-                points=absolute_points[: self._waypoint_count],
-                source=source,
-            )
-
-        relative_points = self._lookup_relative_points(sample)
-        if relative_points:
-            return FutureTrajectoryPlan(
-                points=tuple(
-                    Point2D(x=current.x + dx, y=current.y + dy)
-                    for dx, dy in relative_points[: self._waypoint_count]
-                ),
-                source="frozen_control_delta_model",
+                points=clean_points[: self._waypoint_count],
+                source="clean_q9_linear_no_oracle_metadata_model",
             )
 
         speed_label = self._speed_label(sample)
@@ -95,146 +101,108 @@ class ControlConditionedFutureTrajectoryPlanner:
             source="control_kinematic_prior",
         )
 
-    def _predict_absolute_points(self, sample: BenchmarkSample) -> tuple[Point2D, ...]:
-        model_type = self._model.get("model_type")
-        if model_type not in (
-            "phase9_q9_control_metadata_linear_v1",
-            "phase9_q9_control_metadata_linear_tail_residual_v1",
-        ):
-            return ()
+    def _predict_clean_linear_points(self, sample: BenchmarkSample) -> tuple[Point2D, ...]:
+        feature_mean = self._model.get("feature_mean")
+        feature_scale = self._model.get("feature_scale")
         coefficients = self._model.get("coefficients")
-        if not isinstance(coefficients, list):
+        if not isinstance(feature_mean, list) or not isinstance(feature_scale, list):
             return ()
-        features = self._linear_features(sample)
+        feature_row = self._clean_q9_feature_row(sample)
+        if not feature_row:
+            return ()
+        if len(feature_mean) != len(feature_row) or len(feature_scale) != len(feature_row):
+            return ()
+        row_count = self._waypoint_count * 2
+
+        normalized = []
+        for value, mean, scale in zip(feature_row, feature_mean, feature_scale):
+            safe_scale = float(scale) if abs(float(scale)) > 1e-8 else 1.0
+            normalized.append((float(value) - float(mean)) / safe_scale)
+
         outputs: list[float] = []
-        for row in coefficients:
-            if not isinstance(row, list) or len(row) != len(features):
+        if isinstance(coefficients, list):
+            if len(coefficients) < row_count:
                 return ()
-            outputs.append(
-                sum(float(weight) * feature for weight, feature in zip(row, features))
-            )
-        if model_type == "phase9_q9_control_metadata_linear_tail_residual_v1":
-            outputs = self._apply_tail_residual(sample, outputs)
-        if len(outputs) < self._waypoint_count * 2:
+            for row in coefficients[:row_count]:
+                if not isinstance(row, list) or len(row) != len(normalized):
+                    return ()
+                outputs.append(sum(float(weight) * feature for weight, feature in zip(row, normalized)))
+        else:
+            estimators = self._model.get("estimators")
+            if not isinstance(estimators, list) or len(estimators) < row_count:
+                return ()
+            for estimator in estimators[:row_count]:
+                if not isinstance(estimator, dict):
+                    return ()
+                coef = estimator.get("coef")
+                intercept = estimator.get("intercept")
+                if not isinstance(coef, list) or not isinstance(intercept, (int, float)):
+                    return ()
+                if len(coef) != len(normalized):
+                    return ()
+                outputs.append(float(intercept) + sum(float(weight) * feature for weight, feature in zip(coef, normalized)))
+        if len(outputs) < row_count:
             return ()
         return tuple(
             Point2D(x=outputs[index * 2], y=outputs[index * 2 + 1])
             for index in range(self._waypoint_count)
         )
 
-    def _apply_tail_residual(self, sample: BenchmarkSample, outputs: list[float]) -> list[float]:
-        tail_coefficients = self._model.get("tail_residual_coefficients")
-        if not isinstance(tail_coefficients, list):
-            return outputs
-        tail_start_index = _safe_int(self._model.get("tail_start_index"))
-        if tail_start_index < 0:
-            return outputs
-        tail_start_column = tail_start_index * 2
-        if tail_start_column >= len(outputs):
-            return outputs
-
-        tail_features = self._linear_tail_features(sample)
-        residuals: list[float] = []
-        for row in tail_coefficients:
-            if not isinstance(row, list) or len(row) != len(tail_features):
-                return outputs
-            residuals.append(
-                sum(float(weight) * feature for weight, feature in zip(row, tail_features))
-            )
-        if len(residuals) != len(outputs[tail_start_column:]):
-            return outputs
-        adjusted = outputs[:]
-        for index, residual in enumerate(residuals):
-            adjusted[tail_start_column + index] += residual
-        return adjusted
-
-    @staticmethod
-    def _linear_features(sample: BenchmarkSample) -> tuple[float, ...]:
-        raw = sample.raw_record
-        current = ControlConditionedFutureTrajectoryPlanner._current_position(sample)
-        asker_is_cav1 = 1.0 if str(raw.get("asker_cav_id", "")) == "1" else 0.0
-        speed_idx = _safe_int(raw.get("suggested_speed_idx"))
-        steering_idx = _safe_int(raw.get("suggested_steering_idx"))
-        distance = _safe_float(raw.get("dist"))
-        angle = _safe_float(raw.get("angle"))
-        return (
-            1.0,
-            current.x,
-            current.y,
-            asker_is_cav1,
-            *(1.0 if speed_idx == index else 0.0 for index in range(5)),
-            *(1.0 if steering_idx == index else 0.0 for index in range(5)),
-            distance,
-            sin(angle),
-            cos(angle),
-            distance * sin(angle),
-            distance * cos(angle),
-        )
-
-    @staticmethod
-    def _linear_tail_features(sample: BenchmarkSample) -> tuple[float, ...]:
-        raw = sample.raw_record
-        base = ControlConditionedFutureTrajectoryPlanner._linear_features(sample)
-        current = ControlConditionedFutureTrajectoryPlanner._current_position(sample)
-        distance = _safe_float(raw.get("dist"))
-        angle = _safe_float(raw.get("angle"))
-        speed_idx = _safe_int(raw.get("suggested_speed_idx"))
-        steering_idx = _safe_int(raw.get("suggested_steering_idx"))
-        return base + (
-            current.x * distance,
-            current.y * distance,
-            distance * distance,
-            sin(2.0 * angle),
-            cos(2.0 * angle),
-            distance * distance * sin(angle),
-            distance * distance * cos(angle),
-            float(speed_idx * steering_idx) if speed_idx >= 0 and steering_idx >= 0 else 0.0,
-        )
-
-    def _lookup_relative_points(self, sample: BenchmarkSample) -> tuple[tuple[float, float], ...]:
-        lookup = self._model.get("relative_waypoints_by_key", {})
-        if not isinstance(lookup, dict):
-            return ()
-
-        raw = sample.raw_record
-        keys = (
-            self._model_key(
-                asker_cav_id=str(raw.get("asker_cav_id", "")),
-                speed_idx=str(raw.get("suggested_speed_idx", "")),
-                steering_idx=str(raw.get("suggested_steering_idx", "")),
-            ),
-            self._model_key(
-                asker_cav_id="*",
-                speed_idx=str(raw.get("suggested_speed_idx", "")),
-                steering_idx=str(raw.get("suggested_steering_idx", "")),
-            ),
-            "__fallback__",
-        )
-        for key in keys:
-            value = lookup.get(key)
-            if not isinstance(value, list):
-                continue
-            parsed = self._parse_relative_points(value)
-            if parsed:
-                return parsed
-        return ()
-
-    @staticmethod
-    def _parse_relative_points(value: list[object]) -> tuple[tuple[float, float], ...]:
-        points: list[tuple[float, float]] = []
-        for item in value:
-            if (
-                isinstance(item, list)
-                and len(item) >= 2
-                and isinstance(item[0], (int, float))
-                and isinstance(item[1], (int, float))
-            ):
-                points.append((float(item[0]), float(item[1])))
-        return tuple(points)
+    def _clean_q9_feature_row(self, sample: BenchmarkSample) -> tuple[float, ...]:
+        current = self._current_position(sample)
+        asker_raw = str(sample.raw_record.get("asker_cav_id", "")).strip()
+        asker_from_q = "1" if "I am CAV_1" in sample.scene.raw_question else ""
+        asker_is_cav1 = 1.0 if (asker_raw == "1" or asker_from_q == "1") else 0.0
+        row = [1.0, current.x, current.y, asker_is_cav1]
+        row.extend(self._trajectory_geometry_features(sample, current))
+        row.extend(self._q8_context_features(sample))
+        return tuple(row)
 
     @classmethod
-    def _model_key(cls, *, asker_cav_id: str, speed_idx: str, steering_idx: str) -> str:
-        return f"asker={asker_cav_id}|speed={speed_idx}|steering={steering_idx}"
+    def _trajectory_geometry_features(cls, sample: BenchmarkSample, current: Point2D) -> tuple[float, ...]:
+        points = tuple((float(x), float(y)) for x, y in _COORD_RE.findall(sample.scene.raw_question)[:6])
+        if not points:
+            return (0.0,) * 10
+        rel_points = tuple((px - current.x, py - current.y) for px, py in points)
+        dists = tuple(sqrt(dx * dx + dy * dy) for dx, dy in rel_points)
+        first_dx, first_dy = rel_points[0]
+        last_dx, last_dy = rel_points[-1]
+        first_dist = dists[0]
+        last_dist = dists[-1]
+        if len(points) >= 2:
+            step_lengths = tuple(
+                sqrt((points[idx][0] - points[idx - 1][0]) ** 2 + (points[idx][1] - points[idx - 1][1]) ** 2)
+                for idx in range(1, len(points))
+            )
+            mean_step = sum(step_lengths) / len(step_lengths)
+            variance = sum((value - mean_step) ** 2 for value in step_lengths) / len(step_lengths)
+            std_step = sqrt(variance)
+        else:
+            mean_step = 0.0
+            std_step = 0.0
+        heading = atan2(first_dy, first_dx) if first_dist > 1e-6 else 0.0
+        return (
+            first_dx,
+            first_dy,
+            first_dist,
+            last_dx,
+            last_dy,
+            last_dist,
+            mean_step,
+            std_step,
+            sin(heading),
+            cos(heading),
+        )
+
+    @classmethod
+    def _q8_context_features(cls, sample: BenchmarkSample) -> tuple[float, ...]:
+        speed_label = cls._speed_label(sample)
+        steering_label = cls._steering_label(sample)
+        speed_one_hot = tuple(1.0 if speed_label == label else 0.0 for label in cls._speed_labels)
+        steering_one_hot = tuple(1.0 if steering_label == label else 0.0 for label in cls._steering_labels)
+        speed_value = cls._q8_speed_control_values.get(speed_label, 0.0)
+        steering_value = cls._q8_steering_control_values.get(steering_label, 0.0)
+        return speed_one_hot + steering_one_hot + (float(speed_value), float(steering_value))
 
     @staticmethod
     def _current_position(sample: BenchmarkSample) -> Point2D:
@@ -276,17 +244,3 @@ class ControlConditionedFutureTrajectoryPlanner:
             3: "slightly right",
             4: "right",
         }.get(raw_value, "straight")
-
-
-def _safe_int(value: object) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return -1
-
-
-def _safe_float(value: object) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
