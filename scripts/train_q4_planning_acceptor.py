@@ -16,7 +16,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from kg_coop_drive.application.planning_awareness import PLANNING_LOGREG_FEATURE_NAMES  # noqa: E402
+from kg_coop_drive.application.qa.planning_awareness import PLANNING_LOGREG_FEATURE_NAMES  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:

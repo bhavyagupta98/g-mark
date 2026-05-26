@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator
-from kg_coop_drive.application.v2vgotqa_router import V2VGoTQARouter
+from kg_coop_drive.application.qa.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator
+from kg_coop_drive.application.qa.v2vgotqa_router import V2VGoTQARouter
 from kg_coop_drive.domain.benchmark import BenchmarkSample, BenchmarkTaskType
 from kg_coop_drive.domain.processed_scene import ProcessedFrameSceneData
 from kg_coop_drive.domain.scene import (

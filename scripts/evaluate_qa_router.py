@@ -15,18 +15,18 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from kg_coop_drive.application.v2vgotqa_evaluator import (
+from kg_coop_drive.application.qa.v2vgotqa_evaluator import (
     GraphAblationMode,
     TemporalExecutionMode,
     V2VGoTQAPhase5AEvaluator,
 )
 from kg_coop_drive.application.qa.latency_profiling import SampleLatencyRecord, EvaluationLatencyCollector
-from kg_coop_drive.application.planning_awareness import (
+from kg_coop_drive.application.qa.planning_awareness import (
     PlanningAwarenessRanker,
     PlanningAwarenessSelectionPolicy,
     build_planning_awareness_orchestrator,
 )
-from kg_coop_drive.application.v2vgotqa_router import (
+from kg_coop_drive.application.qa.v2vgotqa_router import (
     AgentMotionPredictionHandler,
     ControlSettingsHandler,
     FutureTrajectoryHandler,
@@ -38,7 +38,7 @@ from kg_coop_drive.application.v2vgotqa_router import (
     PlanningAwarenessHandler,
     V2VGoTQARouter,
 )
-from kg_coop_drive.application.future_trajectory_planner import (
+from kg_coop_drive.application.planning.future_trajectory_planner import (
     ControlConditionedFutureTrajectoryPlanner,
 )
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType

@@ -1,4 +1,4 @@
-from kg_coop_drive.application.cross_agent_associator import CrossAgentAssociator
+from kg_coop_drive.application.tracking.cross_agent_associator import CrossAgentAssociator
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

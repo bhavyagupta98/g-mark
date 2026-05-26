@@ -15,13 +15,13 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from kg_coop_drive.application.planning_awareness import (  # noqa: E402
+from kg_coop_drive.application.qa.planning_awareness import (  # noqa: E402
     PLANNING_LOGREG_FEATURE_NAMES,
     planning_logreg_feature_values,
     build_planning_awareness_orchestrator,
 )
-from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
-from kg_coop_drive.application.v2vgotqa_evaluator import GraphAblationMode  # noqa: E402
+from kg_coop_drive.application.qa.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
+from kg_coop_drive.application.qa.v2vgotqa_evaluator import GraphAblationMode  # noqa: E402
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType  # noqa: E402
 from kg_coop_drive.infrastructure.v2vgot_benchmark_adapter import V2VGoTQABenchmarkAdapter  # noqa: E402
 

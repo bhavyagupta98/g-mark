@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kg_coop_drive.application.v2vgotqa_router import (
+from kg_coop_drive.application.qa.v2vgotqa_router import (
     AgentMotionPredictionHandler,
     ControlSettingsHandler,
     FutureTrajectoryHandler,
@@ -16,7 +16,7 @@ from kg_coop_drive.application.v2vgotqa_router import (
     PlanningAwarenessHandler,
     V2VGoTQARouter,
 )
-from kg_coop_drive.application.planning_awareness import (
+from kg_coop_drive.application.qa.planning_awareness import (
     PlanningAwarenessCandidate,
     PlanningAwarenessDecision,
     build_planning_awareness_orchestrator,

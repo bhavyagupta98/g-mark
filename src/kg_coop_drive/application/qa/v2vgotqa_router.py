@@ -4,11 +4,11 @@ from dataclasses import dataclass, replace
 from math import atan2, dist, tanh
 from typing import Protocol
 
-from kg_coop_drive.application.planning_awareness import (
+from kg_coop_drive.application.qa.planning_awareness import (
     PlanningAwarenessOrchestrator,
     build_planning_awareness_orchestrator,
 )
-from kg_coop_drive.application.future_trajectory_planner import (
+from kg_coop_drive.application.planning.future_trajectory_planner import (
     ControlConditionedFutureTrajectoryPlanner,
 )
 from kg_coop_drive.application.planning.object_motion_predictor import (
@@ -17,15 +17,15 @@ from kg_coop_drive.application.planning.object_motion_predictor import (
 from kg_coop_drive.application.planning.agent_motion_notability_predictor import (
     LearnedAgentMotionNotabilityPredictor,
 )
-from kg_coop_drive.application.control_settings_policy import (
+from kg_coop_drive.application.planning.control_settings_policy import (
     ControlSettingsDecision,
     decide_control_settings,
 )
-from kg_coop_drive.application.qa_selection_policies import (
+from kg_coop_drive.application.qa.qa_selection_policies import (
     InvisibleSelectionPolicy,
     OccludingSelectionPolicy,
 )
-from kg_coop_drive.application.query_engine import SceneQueryEngine
+from kg_coop_drive.application.scene_graph.query_engine import SceneQueryEngine
 from kg_coop_drive.domain.benchmark import BenchmarkSample, BenchmarkTaskType
 from kg_coop_drive.domain.scene import (
     ObjectTrack,

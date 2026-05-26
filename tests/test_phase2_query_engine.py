@@ -1,4 +1,4 @@
-from kg_coop_drive.application.query_engine import SceneQueryEngine
+from kg_coop_drive.application.scene_graph.query_engine import SceneQueryEngine
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

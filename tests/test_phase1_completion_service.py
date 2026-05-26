@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from kg_coop_drive.application.phase1_completion import Phase1CompletionService
+from kg_coop_drive.application.legacy.phase1_completion import Phase1CompletionService
 from kg_coop_drive.infrastructure.v2vgot_collm import V2VGoTCoLLMInspector
 
 

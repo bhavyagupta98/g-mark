@@ -1,4 +1,4 @@
-from kg_coop_drive.application.relation_builder import RelationBuilder
+from kg_coop_drive.application.scene_graph.relation_builder import RelationBuilder
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

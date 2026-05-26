@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType
 
-from scripts.evaluate_v2vgotqa_phase5a import apply_sample_limit as apply_phase5a_sample_limit
 from scripts.e2e.run_e2e_train_pipeline import (
     Q6_E2E_TRAINING_DEFAULTS,
     build_parser as build_e2e_train_parser,
@@ -18,35 +17,17 @@ from scripts.train_q5_object_motion_predictor import (
     target_waypoint_count_for_qa_type,
 )
 from scripts.train_q7_object_motion_predictor import Q7ObjectMotionTrainer
-from scripts.run_phase5_closeout import apply_sample_limit as apply_closeout_sample_limit
+from scripts.evaluate_qa_router import apply_sample_limit
 from scripts.run_qa_split_pipeline import num_future_waypoints_for_official_eval
 from scripts.run_v2vgot_official_qa_eval import patch_evaluator_text
-from scripts.score_phase5_closeout import infer_task_types
 from scripts.export_qa_predictions import export_task
-
-
-def test_score_closeout_infers_run_task_types_missing_from_manifest() -> None:
-    manifest = {"task_types": ["occluding_objects"]}
-    runs = [
-        {"task_type": "notable_objects"},
-        {"task_type": "occluding_objects"},
-        {"task_type": "planning_awareness"},
-    ]
-
-    assert infer_task_types(manifest, runs) == (
-        BenchmarkTaskType.OCCLUDING_OBJECTS,
-        BenchmarkTaskType.NOTABLE_OBJECTS,
-        BenchmarkTaskType.PLANNING_AWARENESS,
-    )
 
 
 def test_limit_zero_means_full_sample_set() -> None:
     samples = ("a", "b", "c")
 
-    assert apply_phase5a_sample_limit(samples, 0) == samples
-    assert apply_closeout_sample_limit(samples, 0) == samples
-    assert apply_phase5a_sample_limit(samples, 2) == ("a", "b")
-    assert apply_closeout_sample_limit(samples, 2) == ("a", "b")
+    assert apply_sample_limit(samples, 0) == samples
+    assert apply_sample_limit(samples, 2) == ("a", "b")
 
 
 def test_official_qa_patch_guards_empty_action_accuracy_denominator() -> None:
@@ -220,6 +201,7 @@ def test_export_task_does_not_fallback_across_explicit_qa_type_ids(tmp_path) -> 
         output_dir=tmp_path,
         baseline_mode="cooperative",
         scenario_name="explicit_q5_missing_exact_sample",
+        progress_every=0,
     )
 
     assert result["exported_count"] == 0

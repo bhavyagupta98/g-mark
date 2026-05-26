@@ -741,25 +741,40 @@ def train_models(
     print("\n" + "=" * 72)
     print("Step 7/8: Q9 model training")
     print("=" * 72)
-    q9_model = models_dir / "q9_future_trajectory_regressor_deployable.json"
-    q9_report = reports_dir / "q9_future_trajectory_regressor_report.json"
+    q9_run_name = "ablation_q9_clean_context_elasticnet"
+    q9_sweep_root = e2e_root / "q9_clean_sweep"
+    q9_model = q9_sweep_root / q9_run_name / f"{q9_run_name}_elasticnet_model.json"
+    q9_report = reports_dir / "q9_clean_context_elasticnet_note.json"
     run(
         [
             sys.executable,
-            "scripts/train_q9_future_trajectory_regressor.py",
+            "scripts/run_gmark_q9_model_sweep.py",
+            "--run-name",
+            q9_run_name,
             "--v2vgot-root",
             v2vgot_root,
-            "--split",
-            "train",
-            "--file-name",
+            "--output-root",
+            str(q9_sweep_root),
+            "--train-file-name",
             train_file_name,
-            "--model-family",
-            "linear_metadata_tail_residual",
-            "--output-json",
-            str(q9_model),
-            "--output-report",
-            str(q9_report),
+            "--val-file-name",
+            "v2v4real_3d_grounding_qa_dataset_nq9sm3w6dc.json",
+            "--models",
+            "elasticnet",
+            "--include-q8-pred-features",
+            "--q8-feature-source",
+            "question_context",
+            "--progress-every",
+            str(progress_every),
         ]
+    )
+    write_json(
+        q9_report,
+        {
+            "q9_model_source": "clean_q8_context_elasticnet",
+            "model_json": str(q9_model),
+            "note": "Leak-safe Q9 sweep model using Q8 prompt-context features.",
+        },
     )
 
     return {

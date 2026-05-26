@@ -1,4 +1,4 @@
-from kg_coop_drive.application.visibility_reasoner import VisibilityReasoner
+from kg_coop_drive.application.scene_graph.visibility_reasoner import VisibilityReasoner
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

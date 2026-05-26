@@ -109,22 +109,23 @@ def ensure_clean_q9_model(*, run_root: Path, v2vgot_root: Path, workers: int, pr
     clean_run_name = f"{run_root.name}_q9_clean_model"
     command = [
         sys.executable,
-        "scripts/run_gmark_table1_q9_clean_eval.py",
+        "scripts/run_gmark_q9_model_sweep.py",
         "--run-name",
         clean_run_name,
         "--v2vgot-root",
         str(v2vgot_root),
         "--output-root",
         str(clean_dir),
-        "--workers",
-        str(workers),
+        "--models",
+        "elasticnet",
+        "--include-q8-pred-features",
+        "--q8-feature-source",
+        "question_context",
         "--progress-every",
         str(progress_every),
-        "--skip-official-eval",
-        "--skip-reported-rows",
     ]
     run(command)
-    model_path = clean_dir / f"{clean_run_name}_clean_q9_model.json"
+    model_path = clean_dir / clean_run_name / f"{clean_run_name}_elasticnet_model.json"
     if not model_path.exists():
         raise FileNotFoundError(f"Expected clean Q9 model not found: {model_path}")
     return model_path

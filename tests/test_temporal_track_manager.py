@@ -1,6 +1,6 @@
 import pytest
 
-from kg_coop_drive.application.temporal_track_manager import TemporalTrackManager
+from kg_coop_drive.application.tracking.temporal_track_manager import TemporalTrackManager
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

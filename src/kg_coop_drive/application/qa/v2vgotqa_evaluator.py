@@ -5,23 +5,23 @@ from dataclasses import replace
 from enum import Enum
 from concurrent.futures import Future, ThreadPoolExecutor
 
-from kg_coop_drive.application.candidate_track_creator import CandidateTrackCreator
-from kg_coop_drive.application.candidate_track_resolver import CandidateTrackResolver
-from kg_coop_drive.application.cross_agent_associator import CrossAgentAssociator
-from kg_coop_drive.application.cross_agent_support_enricher import CrossAgentSupportEnricher
-from kg_coop_drive.application.observation_associator import ObservationAssociator
+from kg_coop_drive.application.tracking.candidate_track_creator import CandidateTrackCreator
+from kg_coop_drive.application.tracking.candidate_track_resolver import CandidateTrackResolver
+from kg_coop_drive.application.tracking.cross_agent_associator import CrossAgentAssociator
+from kg_coop_drive.application.tracking.cross_agent_support_enricher import CrossAgentSupportEnricher
+from kg_coop_drive.application.tracking.observation_associator import ObservationAssociator
 from kg_coop_drive.application.qa.latency_profiling import (
     EvaluationLatencyCollector,
     SampleLatencyRecorder,
 )
-from kg_coop_drive.application.processed_scene_service import ProcessedSceneEnricher
-from kg_coop_drive.application.relation_builder import RelationBuilder
-from kg_coop_drive.application.temporal_track_manager import TemporalTrackManager
-from kg_coop_drive.application.track_merger import TrackMerger
-from kg_coop_drive.application.track_quality_assessor import TrackQualityAssessor
-from kg_coop_drive.application.track_support_enricher import TrackSupportEnricher
-from kg_coop_drive.application.v2vgotqa_router import V2VGoTQARouter
-from kg_coop_drive.application.visibility_reasoner import VisibilityReasoner
+from kg_coop_drive.application.scene_graph.processed_scene_service import ProcessedSceneEnricher
+from kg_coop_drive.application.scene_graph.relation_builder import RelationBuilder
+from kg_coop_drive.application.tracking.temporal_track_manager import TemporalTrackManager
+from kg_coop_drive.application.tracking.track_merger import TrackMerger
+from kg_coop_drive.application.tracking.track_quality_assessor import TrackQualityAssessor
+from kg_coop_drive.application.tracking.track_support_enricher import TrackSupportEnricher
+from kg_coop_drive.application.qa.v2vgotqa_router import V2VGoTQARouter
+from kg_coop_drive.application.scene_graph.visibility_reasoner import VisibilityReasoner
 from kg_coop_drive.domain.benchmark import (
     BenchmarkEvaluationSummary,
     BenchmarkPrediction,

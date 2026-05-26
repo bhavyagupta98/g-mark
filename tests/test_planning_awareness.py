@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kg_coop_drive.application.planning_awareness import (
+from kg_coop_drive.application.qa.planning_awareness import (
     DiverseTopKDecisionPolicy,
     EnergyBasedDecisionPolicy,
     EnergyBasedPlanningAwarenessScorer,

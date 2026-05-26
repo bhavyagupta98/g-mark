@@ -113,19 +113,6 @@ spec:
           cd "${KG_REPO_DIR}"
           python3 -m pip install --no-cache-dir pyyaml pytest scikit-learn plotly addict dash
 
-          # echo
-          # echo "============================================================"
-          # echo "Validating kg_coop_drive Tooling"
-          # echo "============================================================"
-          # python3 -m py_compile \
-          #   scripts/build_v2vgot_table1_reproduction.py \
-          #   scripts/run_v2vgot_official_qa_eval.py
-          # python3 scripts/build_v2vgot_table1_reproduction.py \
-          #   --v2vgot-root "${V2VGOT_ROOT}" \
-          #   --audit-only \
-          #   --output-dir outputs/v2vgot_table1_reproduction || true
-          # echo "[INFO] Audit warnings above are expected until all V2V-GoT released assets are mounted."
-
           echo
           echo "============================================================"
           echo "Runtime Pod Ready"

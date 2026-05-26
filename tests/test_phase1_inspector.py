@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from kg_coop_drive.application.phase1 import Phase1DatasetInspectionService
+from kg_coop_drive.application.legacy.phase1 import Phase1DatasetInspectionService
 from kg_coop_drive.infrastructure.v2vgot_dataset import V2VGoTDatasetInspector
 
 
