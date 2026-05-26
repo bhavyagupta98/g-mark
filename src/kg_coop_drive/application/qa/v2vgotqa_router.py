@@ -1759,6 +1759,7 @@ class InvisibleObjectsHandler(_BaseQueryHandler):
         }
     )
     _LEGACY_RANKERS = frozenset({"legacy", "logreg_legacy_fallback"})
+    _WARNED_LEGACY_RANKERS: set[str] = set()
 
     def __init__(
         self,
@@ -1769,11 +1770,12 @@ class InvisibleObjectsHandler(_BaseQueryHandler):
         super().__init__()
         if ranker not in self._SUPPORTED_RANKERS:
             raise ValueError(f"Unsupported invisible-object ranker: {ranker}")
-        if ranker in self._LEGACY_RANKERS:
+        if ranker in self._LEGACY_RANKERS and ranker not in self._WARNED_LEGACY_RANKERS:
             LOGGER.warning(
                 "InvisibleObjectsHandler ranker '%s' is legacy. Prefer 'logreg_acceptor' for promoted runs.",
                 ranker,
             )
+            self._WARNED_LEGACY_RANKERS.add(ranker)
         self._ranker = ranker
         self._selection_policy = selection_policy or InvisibleSelectionPolicy()
         self._acceptor_model = acceptor_model or {}
