@@ -96,8 +96,8 @@ python3 scripts/report_latency_breakdown.py \
 
 ## 3) G-MARK Ablation Runs
 
-Reference runbook:
-- `docs/gmark_ablation_runbook.md`
+Primary script:
+- `scripts/e2e/run_gmark_ablation_report.py`
 
 ### 3.1 Validation-only ablations (fastest ablation mode)
 
@@ -131,11 +131,11 @@ python3 scripts/e2e/run_gmark_ablation_report.py \
   --v2vgot-root /workspace/repos/V2V-GoT \
   --workers 32 \
   --progress-every 250 \
-  --graph-ablation-mode no_provenance \
-  --graph-ablation-mode no_candidate_retention \
-  --graph-ablation-mode no_uncertainty_conflict \
-  --graph-ablation-mode no_graph_relations \
-  --graph-ablation-mode flat_non_graph_readout
+  --mode no_provenance \
+  --mode no_candidate_retention \
+  --mode no_uncertainty_conflict \
+  --mode no_graph_relations \
+  --mode flat_non_graph_readout
 ```
 
 Primary outputs:
@@ -178,4 +178,3 @@ kubectl logs job/gmark-ablation-report-v2 -n seelab --tail=200
 - Latency breakdown: `scripts/report_latency_breakdown.py`
 - Ablations: `scripts/e2e/run_gmark_ablation_report.py`
 - Ablation train pipeline: `scripts/e2e/run_gmark_ablation_train_pipeline.py`
-- Ablation docs: `docs/gmark_ablation_runbook.md`, `docs/gmark_ablation_interpretation.md`

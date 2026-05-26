@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from math import exp
 import pickle
 
@@ -46,12 +47,12 @@ class LearnedAgentMotionNotabilityPredictor:
                 return None
             try:
                 clf = pickle.loads(base64.b64decode(payload.encode("ascii")))
-            except Exception:
+            except (binascii.Error, pickle.PickleError, ValueError, TypeError):
                 return None
             row = [[self._safe_float(features.get(str(name), 0.0), 0.0) for name in feature_names]]
             try:
                 prob = float(clf.predict_proba(row)[0][1])
-            except Exception:
+            except (AttributeError, TypeError, ValueError, IndexError):
                 return None
             return prob >= threshold
         return None

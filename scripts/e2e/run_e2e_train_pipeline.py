@@ -147,6 +147,23 @@ def write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def assert_promoted_q9_feature_contract(model_json: Path) -> None:
+    payload = read_json(model_json)
+    feature_names = payload.get("feature_names")
+    if not isinstance(feature_names, list):
+        raise ValueError(f"Q9 model missing feature_names list: {model_json}")
+    required_features = {
+        "q8_pred_speed_control_value",
+        "q8_pred_steering_control_value",
+    }
+    missing = sorted(name for name in required_features if name not in feature_names)
+    if missing or len(feature_names) < 26:
+        raise ValueError(
+            "Q9 promoted feature contract failed "
+            f"(len={len(feature_names)}, missing={missing}) for model {model_json}"
+        )
+
+
 def write_train_markdown(path: Path, manifest: dict[str, object]) -> None:
     model_paths = manifest.get("model_paths", {})
     frozen_policy_config = manifest.get("frozen_policy_config", {})
@@ -726,6 +743,7 @@ def train_models(
             ]
         )
         q9_model = q9_sweep_root / q9_run_name / f"{q9_run_name}_elasticnet_model.json"
+        assert_promoted_q9_feature_contract(q9_model)
         q9_report = reports_dir / "q9_clean_context_elasticnet_note.json"
         write_json(
             q9_report,

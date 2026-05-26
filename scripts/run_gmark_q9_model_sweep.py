@@ -106,6 +106,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--models", nargs="+", default=("ridge", "elasticnet", "rf"))
     parser.add_argument("--include-q8-pred-features", action="store_true")
     parser.add_argument(
+        "--allow-base-features-only",
+        action="store_true",
+        help=(
+            "Allow running Q9 without appended Q8-context features. "
+            "By default, promoted clean Q9 enforces Q8-context features."
+        ),
+    )
+    parser.add_argument(
         "--q8-feature-source",
         default="question_context",
         choices=("question_context", "q8_model", "legacy_jsonl"),
@@ -257,6 +265,16 @@ def parse_q8_labels(answer_text: str) -> tuple[str, str]:
     if steer_match:
         steer = steer_match.group(1).strip().lower()
     return speed, steer
+
+
+def parse_q8_labels_from_sample(sample: BenchmarkSample) -> tuple[str, str]:
+    speed_label, steering_label = parse_q8_labels(sample.scene.raw_question)
+    if not speed_label or not steering_label:
+        raise ValueError(
+            "Missing Q8 speed/steering labels in Q9 question context for sample_id="
+            f"{sample.sample_id}. Refusing fallback to raw metadata fields."
+        )
+    return speed_label, steering_label
 
 
 def q8_label_features(*, speed_label: str, steering_label: str) -> list[float]:
@@ -431,7 +449,7 @@ def build_q8_prediction_lookup_from_question_context(
     with output_jsonl.open("w", encoding="utf-8") as handle:
         for idx, sample in enumerate(samples, start=1):
             started_at = time.monotonic()
-            speed_label, steering_label = parse_q8_labels(sample.scene.raw_question)
+            speed_label, steering_label = parse_q8_labels_from_sample(sample)
             features, prediction_metadata = q8_metadata_from_labels(
                 speed_label=speed_label,
                 steering_label=steering_label,
@@ -565,6 +583,40 @@ def build_q8_prediction_lookup_from_model(
         flush=True,
     )
     return lookup
+
+
+def validate_q8_lookup_promoted_contract(
+    *,
+    split_name: str,
+    samples: tuple[BenchmarkSample, ...],
+    lookup: dict[str, list[float]],
+) -> None:
+    expected_width = q8_feature_width()
+    missing_ids: list[str] = []
+    bad_width_ids: list[str] = []
+    invalid_onehot_ids: list[str] = []
+    for sample in samples:
+        row = lookup.get(sample.sample_id)
+        if row is None:
+            missing_ids.append(sample.sample_id)
+            continue
+        if len(row) != expected_width:
+            bad_width_ids.append(sample.sample_id)
+            continue
+        speed_sum = sum(float(value) for value in row[: len(SPEED_LABELS)])
+        steer_start = len(SPEED_LABELS)
+        steer_end = steer_start + len(STEER_LABELS)
+        steer_sum = sum(float(value) for value in row[steer_start:steer_end])
+        if abs(speed_sum - 1.0) > 1e-6 or abs(steer_sum - 1.0) > 1e-6:
+            invalid_onehot_ids.append(sample.sample_id)
+    if missing_ids or bad_width_ids or invalid_onehot_ids:
+        raise ValueError(
+            "Promoted Q9 feature contract failed for split="
+            f"{split_name}: missing={len(missing_ids)} bad_width={len(bad_width_ids)} "
+            f"invalid_onehot={len(invalid_onehot_ids)} "
+            f"(examples missing={missing_ids[:5]}, bad_width={bad_width_ids[:5]}, "
+            f"invalid_onehot={invalid_onehot_ids[:5]})."
+        )
 
 
 def feature_names(include_q8_pred_features: bool) -> list[str]:
@@ -951,6 +1003,12 @@ def main() -> int:
         if not train_samples:
             raise ValueError("All train samples were removed by train/val overlap filtering.")
 
+    if not args.include_q8_pred_features and not args.allow_base_features_only:
+        raise ValueError(
+            "Promoted clean Q9 requires --include-q8-pred-features. "
+            "Use --allow-base-features-only only for explicit diagnostics."
+        )
+
     q8_train_lookup: dict[str, list[float]] = {}
     q8_val_lookup: dict[str, list[float]] = {}
     q8_feature_source: dict[str, object] | None = None
@@ -1039,6 +1097,16 @@ def main() -> int:
                 "question_context, q8_model with --q8-model-json, or legacy_jsonl "
                 "with --q8-predictions-jsonl."
             )
+        validate_q8_lookup_promoted_contract(
+            split_name="train",
+            samples=train_samples,
+            lookup=q8_train_lookup,
+        )
+        validate_q8_lookup_promoted_contract(
+            split_name="val",
+            samples=val_samples,
+            lookup=q8_val_lookup,
+        )
 
     x_train, y_train, usable_train = build_xy(
         train_samples,

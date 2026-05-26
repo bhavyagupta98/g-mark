@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import logging
 from math import atan2, dist, tanh
 from typing import Protocol
 
@@ -34,6 +35,8 @@ from kg_coop_drive.domain.scene import (
     TrackStatus,
     VisibilityState,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1741,15 +1744,8 @@ class InvisibleObjectsHandler(_BaseQueryHandler):
     """Handles qa_type_id 13 invisible-object questions."""
 
     task_type = BenchmarkTaskType.INVISIBLE_OBJECTS
-
-    def __init__(
-        self,
-        ranker: str = "legacy",
-        selection_policy: InvisibleSelectionPolicy | None = None,
-        acceptor_model: dict[str, object] | None = None,
-    ) -> None:
-        super().__init__()
-        if ranker not in {
+    _SUPPORTED_RANKERS = frozenset(
+        {
             "legacy",
             "risk_adaptive",
             "road_region",
@@ -1760,8 +1756,24 @@ class InvisibleObjectsHandler(_BaseQueryHandler):
             "mlp_acceptor",
             "logreg_legacy_fallback",
             "logreg_lateral_rescue",
-        }:
+        }
+    )
+    _LEGACY_RANKERS = frozenset({"legacy", "logreg_legacy_fallback"})
+
+    def __init__(
+        self,
+        ranker: str = "legacy",
+        selection_policy: InvisibleSelectionPolicy | None = None,
+        acceptor_model: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__()
+        if ranker not in self._SUPPORTED_RANKERS:
             raise ValueError(f"Unsupported invisible-object ranker: {ranker}")
+        if ranker in self._LEGACY_RANKERS:
+            LOGGER.warning(
+                "InvisibleObjectsHandler ranker '%s' is legacy. Prefer 'logreg_acceptor' for promoted runs.",
+                ranker,
+            )
         self._ranker = ranker
         self._selection_policy = selection_policy or InvisibleSelectionPolicy()
         self._acceptor_model = acceptor_model or {}

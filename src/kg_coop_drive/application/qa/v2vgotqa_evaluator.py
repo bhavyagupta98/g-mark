@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum
@@ -32,6 +33,8 @@ from kg_coop_drive.domain.processed_scene import ProcessedFrameSceneData
 from kg_coop_drive.domain.scene import CooperativeScene, VisibilityFact
 from kg_coop_drive.domain.scene import ObjectTrack, ProvenanceRecord, RelationType, TrackStatus, VisibilityState
 from kg_coop_drive.infrastructure.v2vgot_processed_assets import V2VGoTProcessedAssetLoader
+
+LOGGER = logging.getLogger(__name__)
 
 
 class GraphAblationMode(str, Enum):
@@ -157,10 +160,9 @@ class V2VGoTQAPhase5AEvaluator:
             if sample_recorder is not None and self._latency_collector is not None:
                 self._latency_collector.finish_sample(sample_recorder)
             if progress_every > 0 and (index == 1 or index % progress_every == 0 or index == total_samples):
-                print(
+                LOGGER.info(
                     f"progress: {index}/{total_samples} "
                     f"task={sample.task_type.value} sample_id={sample.sample_id}",
-                    flush=True,
                 )
         return tuple(predictions)
 

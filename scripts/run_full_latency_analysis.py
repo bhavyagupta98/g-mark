@@ -70,6 +70,23 @@ def read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def assert_promoted_q9_feature_contract(model_json: Path) -> None:
+    payload = read_json(model_json)
+    feature_names = payload.get("feature_names")
+    if not isinstance(feature_names, list):
+        raise ValueError(f"Q9 model missing feature_names list: {model_json}")
+    required_features = {
+        "q8_pred_speed_control_value",
+        "q8_pred_steering_control_value",
+    }
+    missing = sorted(name for name in required_features if name not in feature_names)
+    if missing or len(feature_names) < 26:
+        raise ValueError(
+            "Q9 promoted feature contract failed "
+            f"(len={len(feature_names)}, missing={missing}) for model {model_json}"
+        )
+
+
 def resolve_model_paths(args: argparse.Namespace) -> dict[str, str]:
     model_paths = {
         "q3_model_json": args.q3_model_json,
@@ -128,6 +145,7 @@ def ensure_clean_q9_model(*, run_root: Path, v2vgot_root: Path, workers: int, pr
     model_path = clean_dir / clean_run_name / f"{clean_run_name}_elasticnet_model.json"
     if not model_path.exists():
         raise FileNotFoundError(f"Expected clean Q9 model not found: {model_path}")
+    assert_promoted_q9_feature_contract(model_path)
     return model_path
 
 

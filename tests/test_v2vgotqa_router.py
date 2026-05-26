@@ -1550,7 +1550,7 @@ def test_v2vgotqa_router_answers_agent_motion_prediction() -> None:
     assert answer.supported is True
     assert answer.object_ids == ("CAV_1",)
     assert answer.answer_text == (
-        "Predicted agent motion: CAV_1=hold position near (5.0, 0.0)."
+        "Predicted agent motion: CAV_1=hold position near (5.0, 0.0); CAV_1 is a not notable object."
     )
 
 
@@ -1656,7 +1656,7 @@ def test_agent_motion_prediction_handler_projects_agent_velocity() -> None:
     assert answer.supported is True
     assert answer.object_ids == ("CAV_1",)
     assert answer.answer_text == (
-        "Predicted agent motion: CAV_1=move right from (5.0, 1.0) to (5.0, 3.0)."
+        "Predicted agent motion: CAV_1=move right from (5.0, 1.0) to (5.0, 3.0); CAV_1 is a not notable object."
     )
 
 
@@ -1686,7 +1686,7 @@ def test_agent_motion_prediction_handler_uses_planned_trajectory_when_velocity_i
     assert answer.supported is True
     assert answer.object_ids == ("CAV_1",)
     assert answer.answer_text == (
-        "Predicted agent motion: CAV_1=move forward from (5.0, 1.0) to (25.0, 1.5)."
+        "Predicted agent motion: CAV_1=move forward from (5.0, 1.0) to (25.0, 1.5); CAV_1 is a not notable object."
     )
 
 
