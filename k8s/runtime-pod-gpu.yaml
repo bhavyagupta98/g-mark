@@ -138,7 +138,7 @@ spec:
   volumes:
     - name: workspace
       persistentVolumeClaim:
-        claimName: bgupta-pvc
+        claimName: 
     - name: dshm
       emptyDir:
         medium: Memory
