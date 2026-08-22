@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from kg_coop_drive.application.candidate_track_creator import CandidateTrackCreator
-from kg_coop_drive.application.candidate_track_resolver import CandidateTrackResolver
-from kg_coop_drive.application.observation_associator import ObservationAssociator
-from kg_coop_drive.application.processed_scene_service import ProcessedSceneEnricher
-from kg_coop_drive.application.relation_builder import RelationBuilder
-from kg_coop_drive.application.track_quality_assessor import TrackQualityAssessor
-from kg_coop_drive.application.track_merger import TrackMerger
-from kg_coop_drive.application.track_support_enricher import TrackSupportEnricher
-from kg_coop_drive.application.visibility_reasoner import VisibilityReasoner
+from kg_coop_drive.application.tracking.candidate_track_creator import CandidateTrackCreator
+from kg_coop_drive.application.tracking.candidate_track_resolver import CandidateTrackResolver
+from kg_coop_drive.application.tracking.observation_associator import ObservationAssociator
+from kg_coop_drive.application.scene_graph.processed_scene_service import ProcessedSceneEnricher
+from kg_coop_drive.application.scene_graph.relation_builder import RelationBuilder
+from kg_coop_drive.application.tracking.track_quality_assessor import TrackQualityAssessor
+from kg_coop_drive.application.tracking.track_merger import TrackMerger
+from kg_coop_drive.application.tracking.track_support_enricher import TrackSupportEnricher
+from kg_coop_drive.application.scene_graph.visibility_reasoner import VisibilityReasoner
 from kg_coop_drive.domain.processed_scene import ProcessedFrameSceneData
 from kg_coop_drive.domain.scene import CooperativeScene
 

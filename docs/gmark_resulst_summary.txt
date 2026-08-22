@@ -1,0 +1,443 @@
+G-MARK Q1-Q9 PROMOTED APPROACH DUMP (LATEST SELECTED/PROMOTED)
+Date: 2026-05-26
+Scope: Current selected/promoted versions only (older exploratory checkpoints omitted except where needed for context).
+Primary source docs scanned:
+- docs/project_status_summary.md
+- docs/gmark_model_head_selection_ablation.md
+- docs/phase9_deferred_task_expansion_and_planning_eval.md
+- docs/q9_clean_sweep_progress_checkpoint.md
+And implementation references in scripts/src used to confirm feature/model details.
+
+============================================================
+0) SHARED END-TO-END FLOW (APPLIES TO Q1-Q9)
+============================================================
+
+A) Input and sample loading
+1. Input QA rows come from V2V-GoT QA JSON (train/val split), typically:
+   DMSTrack/V2V4Real/official_models/<split>/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json
+2. Adapter: V2VGoTQABenchmarkAdapter converts each row into BenchmarkSample.
+3. Each sample includes:
+   - sample_id, qa_type_id, task_type
+   - scene seed (agents, asker id, trajectory context, raw record)
+   - question text and reference answer text (for evaluation/training only)
+
+B) Cooperative KG formation (scene preparation)
+Pipeline stages (deterministic, in-memory dataclass graph):
+1. ProcessedSceneEnricher: attach processed observations/tracks/visibility facts.
+2. ObservationAssociator: match observations to tracks (type + distance gates).
+3. TrackSupportEnricher: add observation support/provenance.
+4. CandidateTrackCreator: promote unmatched observations to candidate tracks.
+5. CandidateTrackResolver: keep plausible candidates, prune weak artifacts.
+6. CrossAgentAssociator: associate same object evidence across agents.
+7. CrossAgentSupportEnricher: add cross-agent support/provenance.
+8. TrackMerger: conservative duplicate merging.
+9. TrackQualityAssessor: compute confidence/support/conflict/uncertainty/status updates.
+10. VisibilityReasoner: visible/occluded/uncertain facts for asker.
+11. RelationBuilder: build relation edges (near trajectory, path relevant, spatial, cooperative support, low conflict).
+
+Graph entities and facts:
+- Nodes/entities: CooperativeScene, AgentContext, ObjectTrack, ObservationEvidence.
+- Facts/edges: VisibilityFact, RelationFact, ProvenanceRecord.
+- Key quality signals: support_count, conflict_score, uncertainty_score, confidence, status.
+
+C) Router inference and task head dispatch
+- Script path: scripts/run_qa_split_pipeline.py -> scripts/evaluate_qa_router.py
+- Router: V2VGoTQARouter dispatches to task handlers by task type.
+- Baseline mode for promoted runs: cooperative (ego_only used mainly for ablations).
+
+D) Output formatting and official evaluation
+1. Raw predictions JSONL from router include sample_id, qa_type_id, object_ids and/or answer_text.
+2. Export script: scripts/export_qa_predictions.py converts to official-style outputs field.
+   - Q1-Q4: object_id -> coordinate phrase rendering.
+   - Q5/Q6/Q8/Q9: handler answer_text is passed through (deferred tasks).
+3. Official evaluation path:
+   scripts/evaluate_official_qa.py and run_v2vgot_official_qa_eval wrapper.
+4. Metric conventions:
+   - Q1-Q4: strict localization F1/P/R at 0.5m.
+   - Q5/Q7: L2 (l2_error_avg_123_all primary).
+   - Q6: binary accuracy.
+   - Q8: normalized action error = action_edit_dist / 8.
+   - Q9: trajectory L2 avg (l2_error_avg_all).
+
+============================================================
+1) Q1 NOTABLE OBJECTS (qa_type_id=11)
+============================================================
+Question:
+- Which notable objects are visible to the asking vehicle?
+
+Objective:
+- Return visible, trajectory-relevant objects while suppressing weak/noisy candidates.
+
+Input:
+- Cooperative KG scene with object tracks + visibility + trajectory + provenance.
+
+KG logic used:
+- Visibility filter: object must be visible to asker.
+- Relevance signals: distance to trajectory / first waypoint, support/provenance, confidence, conflict/uncertainty penalties.
+- Candidate status is penalized vs supported/confirmed tracks.
+
+Features used for inferencing:
+- No learned model in promoted checkpoint.
+- Deterministic heuristic scoring over graph-native attributes:
+  visibility, trajectory proximity, support_count, confidence, status, conflict_score, uncertainty_score, distance-to-asker.
+
+Model/hyperparameters/loss:
+- Model: deterministic heuristic ranker (notable_ranker=heuristic).
+- No trainable loss/epochs.
+
+Output format:
+- Router returns selected object_ids.
+- Export renders: "There is a car at (x,y) visible to you." (one phrase per selected object).
+
+Final promoted result:
+- Val F1/P/R: 0.585836 / 0.674759 / 0.517621
+- Baseline ref: 0.525000
+- Relative improvement: +11.59%
+
+============================================================
+2) Q2 OCCLUDING OBJECTS (qa_type_id=12)
+============================================================
+Question:
+- Which objects obstruct the asking vehicle's view?
+
+Objective:
+- Select true blocker objects causing occlusion, with controlled precision-recall tradeoff.
+
+Input:
+- Cooperative KG with visible objects + hidden/occluded objects + geometry/provenance.
+
+KG logic used:
+- Build blocker candidates from visible objects.
+- Pair each visible blocker with hidden-object evidence via:
+  - line-of-sight bearing alignment,
+  - plausible depth ordering (hidden behind visible),
+  - visible-hidden proximity,
+  - hidden-object trajectory relevance.
+- Add provenance/support and confidence terms.
+- Penalize conflict/uncertainty/candidate-only quality.
+- Sparse-evidence fallback backfills from visible pool when blocker evidence is thin.
+
+Features used for inferencing:
+- No learned model in promoted checkpoint.
+- Deterministic risk-adaptive score built from KG geometry + support + quality features.
+
+Model/hyperparameters/loss:
+- Model: risk_adaptive deterministic selector.
+- No trainable loss/epochs.
+
+Output format:
+- Router returns blocker object_ids.
+- Export renders: "There is a car at (x,y) obstructing your view."
+
+Final promoted result:
+- Val F1/P/R: 0.427921 / 0.452542 / 0.405840
+- Baseline ref: 0.301000
+- Relative improvement: +42.17%
+
+============================================================
+3) Q3 INVISIBLE OBJECTS (qa_type_id=13)
+============================================================
+Question:
+- Which notable objects are invisible/occluded to the asking vehicle?
+
+Objective:
+- Maximize hidden-object recall without excessive false positives.
+
+Input:
+- Cooperative KG with visibility states and hidden-object candidates.
+
+KG logic used:
+- Stage 1 retrieval: broad hidden-candidate pool from occluded/uncertain objects.
+- Stage 2 acceptance: learned acceptor filters broad candidate pool.
+- Promoted retrieval knobs: shortlist_size=64, max_distance_to_trajectory=8.0m, max_results=1.
+
+Features used for inferencing (candidate row features):
+- rank, role_score,
+- relative_x, relative_y, abs_relative_x, abs_relative_y,
+- distance_to_asker, distance_to_trajectory,
+- support_count,
+- conflict_score,
+- status one-hot (confirmed/supported/candidate).
+
+Model/hyperparameters/loss:
+- Selected policy: invisible-ranker=logreg_acceptor.
+- Deployable model:
+  outputs/phase8_train_dev/q3_policy_optimization_traj8_short64/
+  q3_logreg_mlp_legacy_traj8_short64_logreg_max_recall_p0p5_t0p33_deployable.json
+- Trainer: scripts/train_q3_invisible_acceptor.py
+- Optimizer: custom batch logistic regression (manual gradient descent).
+- Defaults in trainer: learning_rate=0.05, epochs=600, l2=0.01, class balancing on.
+- Threshold search on train: 0.05..0.95, selected threshold=0.33 in promoted checkpoint.
+- Loss form: weighted binary cross-entropy with L2 penalty.
+
+Output format:
+- Router selects max one object id.
+- Export renders: "There is a car at (x,y) invisible to you."
+
+Final promoted result:
+- Val localization F1/P/R: 0.493934 / 0.488014 / 0.500000
+- Baseline ref: 0.440000
+- Relative improvement: +12.26%
+
+============================================================
+4) Q4 PLANNING AWARENESS (qa_type_id=14)
+============================================================
+Question:
+- Which objects should the ego be aware of for its planned trajectory?
+
+Objective:
+- Select path-critical objects with improved precision while preserving recall.
+
+Input:
+- Cooperative KG with trajectory relations, visibility, support/provenance, uncertainty/conflict.
+
+KG logic used:
+- Ranker: relational_importance over candidate objects near planning corridor.
+- Selection: trajectory_calibrated_acceptor (train-frozen acceptor + calibration rules).
+- Duplicate suppression radius in promoted checkpoint: 1.0m.
+
+Features used for inferencing:
+- Planning acceptor uses PLANNING_LOGREG_FEATURE_NAMES (graph-derived fixed-width set), including trajectory/risk/context/provenance-quality terms.
+
+Model/hyperparameters/loss:
+- Selected deployable:
+  outputs/phase8_train_dev/q4_policy_optimization/
+  q4_planning_rel_logreg_nd1p0_trajcal_v1_deployable.json
+- Trainer: scripts/train_q4_planning_acceptor.py
+- Selected model type: logreg (MLP path exists but not promoted).
+- Train defaults: learning_rate=0.08, epochs=500, regularization=l2, l2=0.001.
+- Threshold selected on train; policy also enforces max_results and near-duplicate gating.
+- Loss form: weighted BCE with regularization.
+
+Output format:
+- Router returns selected object_ids.
+- Export renders: "There is a car at (x,y) close to your planned future trajectory."
+
+Final promoted result:
+- Val F1/P/R: 0.613774 / 0.576685 / 0.655962
+- Baseline ref: 0.608000
+- Relative improvement: +0.95%
+
+============================================================
+5) Q5 OBJECT MOTION PREDICTION (qa_type_id=15)
+============================================================
+Question:
+- Where will notable objects move?
+
+Objective:
+- Predict object future motion/endpoint robustly for cooperative scenes.
+
+Input:
+- Cooperative KG object tracks matched to Q5 ground-truth mentions during training.
+
+KG logic used:
+- Candidate objects selected using trajectory/visibility-aware gating.
+- Learned head predicts future delta from graph feature vector.
+
+Features used for inferencing:
+- Base features:
+  bias, x, y, vx, vy, speed, distance_to_trajectory, distance_to_asker,
+  confidence, support_count, conflict_score, uncertainty_score,
+  status_supported, status_candidate,
+  visibility_visible, visibility_occluded, visibility_uncertain.
+- Promoted run uses path-relative enriched feature regime (per selected checkpoint naming and docs).
+
+Model/hyperparameters/loss:
+- Selected family: regression_tree.
+- Promoted model artifact:
+  outputs/phase9_train_dev/phase9_q5_tree_sweep_v1_s0/
+  d9_l64_g0.01_m2.0_a120_deployable.json
+- Interpreted settings from checkpoint naming/doc:
+  tree_max_depth=9, tree_min_leaf=64, tree_min_gain=0.01,
+  max_match_distance=2.0, max_abs_delta=120.
+- Tree split objective in trainer: SSE gain on target deltas.
+
+Output format:
+- Handler returns motion answer text with object start + predicted trajectory points.
+- Export preserves/normalizes this into official text form.
+
+Final promoted result:
+- Val l2_error_avg_123_all: 3.822136
+- Baseline ref: 8.05
+- Relative improvement: +52.52%
+
+============================================================
+6) Q6 AGENT MOTION PREDICTION (qa_type_id=16)
+============================================================
+Question:
+- Will other CAV motion be notable/relevant for ego?
+
+Objective:
+- Binary classification of agent-motion notability.
+
+Input:
+- Cooperative scene-level agent trajectories + ego path context + nearby object context.
+
+KG/scene features used for inferencing (16 features):
+- bias
+- other_planned_final_dx, other_planned_final_dy, other_planned_final_dist
+- other_planned_max_step
+- other_min_distance_to_asker_path
+- asker_path_length, asker_path_max_step
+- asker_nearby_object_count_5m, asker_nearby_object_count_10m
+- asker_nearby_dynamic_count_10m
+- other_path_overlap_ratio_2m
+- endpoint_distance_to_asker_final
+- other_heading_alignment_with_asker_goal
+- other_path_curvature_proxy
+- other_ahead_of_asker_goal_flag
+
+Model/hyperparameters/loss:
+- Selected family: GBDT classifier.
+- Promoted model:
+  outputs/phase9_train_dev/q6_gbdt_v4/
+  q6_gbdt_tight_n280_lr0.04_d2_l96_s0.7_t0.38.json
+- Selected hyperparameters:
+  n_estimators=280, learning_rate=0.04, max_depth=2,
+  min_samples_leaf=96, subsample=0.7, threshold=0.38.
+- Loss: backend classifier probability (GBDT), thresholded for binary accuracy.
+
+Output format:
+- Handler outputs answer text for notable vs not notable agent motion.
+- Export keeps deferred-task answer_text for official evaluator.
+
+Final promoted result:
+- Val accuracy: 0.904527
+- Baseline ref: 0.874000
+- Relative improvement: +3.49%
+
+============================================================
+7) Q7 OBJECT MOTION PREDICTION (qa_type_id=17)
+============================================================
+Question:
+- Overall object-motion prediction variant in benchmark (shared task family with Q5).
+
+Objective:
+- Same family as Q5, evaluated on qa_type_id=17 target path.
+
+Input/KG/features/model:
+- Uses same selected object-motion head path as Q5 in current promoted pipeline.
+- Same deployable model and export/eval path currently produce matched headline value.
+
+Output format:
+- Same deferred object-motion answer text pathway as Q5.
+
+Final promoted result:
+- Val l2_error_avg_123_all: 3.822136
+- Baseline ref: 7.61
+- Relative improvement: +49.77%
+
+Note:
+- Current docs explicitly record that Q5/Q7 share the same effective model/export path in this promoted checkpoint.
+
+============================================================
+8) Q8 CONTROL SETTINGS (qa_type_id=18)
+============================================================
+Question:
+- What speed and steering settings should ego use?
+
+Objective:
+- Predict control classes with low action edit-distance error.
+
+Input:
+- Cooperative KG-derived control context features.
+
+KG features used for inferencing:
+- Base control features:
+  top risk/object trajectory distance, asker distance, confidence/conflict/uncertainty,
+  support/provenance/visibility/status and related control-context terms.
+- Extended promoted set (extended_v1):
+  distance_to_first_waypoint,
+  nearest waypoint index (normalized),
+  along-path progress (normalized),
+  local path curvature,
+  heading alignment.
+
+Model/hyperparameters/loss:
+- Selected handler policy: linear_classifier.
+- Selected model:
+  outputs/phase9_train_dev/q8_control_linear_classifier_v7_extended_ordinal_risk3_deployable.json
+- Train command settings (promoted):
+  feature_set=extended_v1,
+  speed_head_type=ordinal,
+  speed_class_weighting=sqrt_inverse_freq,
+  steering_class_weighting=none,
+  l2_regularization=1e-4,
+  speed_ordinal_threshold_policy=risk3,
+  speed_risk_split_low=0.2,
+  speed_risk_split_high=0.5.
+- Fitting method:
+  weighted linear heads (closed-form ridge-style solve),
+  ordinal speed decoded by threshold search,
+  risk-bucket-specific thresholds for speed under risk3 policy.
+
+Output format:
+- Handler returns speed/steering textual answer.
+- Export passes answer_text directly to official deferred-task eval.
+
+Final promoted result:
+- Val normalized action error: 0.076139
+- Baseline ref: 0.087600
+- Relative improvement: +13.08%
+
+============================================================
+9) Q9 FUTURE TRAJECTORY (qa_type_id=19)
+============================================================
+Question:
+- What is ego's suggested future trajectory?
+
+Objective:
+- Predict future waypoint coordinates with a leak-free, benchmark-defensible feature path.
+
+Input:
+- Q9 sample context + control-conditioned trajectory formulation.
+
+KG/context features used for inferencing (selected clean Q9 path):
+- 14 base Q9 geometry/context features.
+- 12 appended Q8-context numeric features (from Q9 prompt context, not leakage-risk metadata):
+  - speed one-hot: fast, moderate, slow, very slow, stop
+  - steering one-hot: left, slightly left, straight, slightly right, right
+  - q8_pred_speed_control_value
+  - q8_pred_steering_control_value
+
+Model/hyperparameters/loss:
+- Selected clean baseline family: context-only ElasticNet (Q8 prompt-context feature path).
+- Frozen Table-I row family label: G-MARK (ElasticNet-26).
+- Key run lineage:
+  - gmark_q9_q8context_elasticnet_v1_withq8feat
+  - gmark_q9_v2_context_only_elasticnet
+- Leakage-safe constraint:
+  direct metadata fields are excluded from model input:
+  dist, angle, suggested_speed_idx, suggested_steering_idx,
+  future_trajectory_str_in_ego, future_trajectory_str_in_self.
+- Target: flattened waypoint coordinates [x1,y1,...,x6,y6].
+
+Output format:
+- FutureTrajectoryHandler returns trajectory answer text.
+- Export passes answer_text directly (qa_type_id=19), official evaluator computes L2 metrics.
+
+Final promoted clean result (leak-free Q8-context path):
+- Frozen Table-I row: G-MARK (ElasticNet-26)
+- L2 (1s/2s/3s/avg): 1.65 / 2.71 / 3.77 / 2.71
+- Collision rate avg: 0.00
+- Comm MB: 0.0159
+- Baseline ref L2 avg: 2.62
+- Relative L2 reduction vs baseline: about 3.4%
+
+Important note:
+- Older control_metadata_linear_v1 / control_metadata_linear_tail_residual_v1 Q9 lines are legacy and flagged as leakage-risk in the clean-sweep notes.
+- For leak-free reporting, use the Q8-context ElasticNet clean sweep/Table-I freeze.
+
+============================================================
+10) FINAL PROMOTED RESULTS SNAPSHOT (Q1-Q9)
+============================================================
+
+Q1 notable_objects: F1@0.5m = 0.585836 (ref 0.525000, +11.59%)
+Q2 occluding_objects: F1@0.5m = 0.427921 (ref 0.301000, +42.17%)
+Q3 invisible_objects: F1@0.5m = 0.493934 (ref 0.440000, +12.26%)
+Q4 planning_awareness: F1@0.5m = 0.613774 (ref 0.608000, +0.95%)
+Q5 object_motion_prediction: L2 Avg123 = 3.822136 (ref 8.050000, +52.52%)
+Q6 agent_motion_prediction: Accuracy = 0.904527 (ref 0.874000, +3.49%)
+Q7 object_motion_prediction: L2 Avg123 = 3.822136 (ref 7.610000, +49.77%)
+Q8 control_settings: Action L1/8 = 0.076139 (ref 0.087600, +13.08%)
+Q9 future_trajectory: L2 Avg = 2.71 (ref 2.620000, ~3.4% higher error; leak-free ElasticNet-26 clean row)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from dataclasses import dataclass
 from math import dist
 import pickle
@@ -58,7 +59,7 @@ class LearnedObjectMotionPredictor:
                     dx=end_x - object_track.position.x,
                     dy=end_y - object_track.position.y,
                 ),
-                source="frozen_q5_linear_model",
+                source=self._model_source(),
             )
 
         velocity = object_track.velocity
@@ -139,7 +140,7 @@ class LearnedObjectMotionPredictor:
                 return None
             try:
                 regressors = pickle.loads(base64.b64decode(payload.encode("ascii")))
-            except Exception:
+            except (binascii.Error, pickle.PickleError, ValueError, TypeError):
                 return None
             if isinstance(regressors, tuple):
                 regressors = list(regressors)
@@ -148,7 +149,7 @@ class LearnedObjectMotionPredictor:
             features = [[float(feature_map.get(str(name), 0.0)) for name in feature_names]]
             try:
                 target_values = [float(regressor.predict(features)[0]) for regressor in regressors]
-            except Exception:
+            except (AttributeError, TypeError, ValueError, IndexError):
                 return None
         elif model_type == "phase9_q5_object_motion_mlp_v1":
             feature_names = self._model.get("feature_names")
@@ -157,12 +158,12 @@ class LearnedObjectMotionPredictor:
                 return None
             try:
                 regressor = pickle.loads(base64.b64decode(payload.encode("ascii")))
-            except Exception:
+            except (binascii.Error, pickle.PickleError, ValueError, TypeError):
                 return None
             features = [[float(feature_map.get(str(name), 0.0)) for name in feature_names]]
             try:
                 raw_prediction = regressor.predict(features)[0]
-            except Exception:
+            except (AttributeError, TypeError, ValueError, IndexError):
                 return None
             try:
                 target_values = [float(value) for value in raw_prediction]
@@ -178,6 +179,10 @@ class LearnedObjectMotionPredictor:
             dy = max(-max_abs_delta, min(max_abs_delta, float(target_values[index + 1])))
             future_points.append((object_track.position.x + dx, object_track.position.y + dy))
         return tuple(future_points) if future_points else None
+
+    def _model_source(self) -> str:
+        model_type = str(self._model.get("model_type", ""))
+        return model_type if model_type else "frozen_q5_model"
 
     @staticmethod
     def _piecewise_key(

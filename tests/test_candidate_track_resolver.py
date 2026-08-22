@@ -1,4 +1,4 @@
-from kg_coop_drive.application.candidate_track_resolver import CandidateTrackResolver
+from kg_coop_drive.application.tracking.candidate_track_resolver import CandidateTrackResolver
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

@@ -1,4 +1,4 @@
-from kg_coop_drive.application.metrics_reporter import (
+from kg_coop_drive.application.metrics.metrics_reporter import (
     SceneMetricsReporter,
     TemporalMetricsReporter,
 )

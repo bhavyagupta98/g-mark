@@ -1,4 +1,4 @@
-from kg_coop_drive.application.track_lifecycle_manager import TrackLifecycleManager
+from kg_coop_drive.application.tracking.track_lifecycle_manager import TrackLifecycleManager
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

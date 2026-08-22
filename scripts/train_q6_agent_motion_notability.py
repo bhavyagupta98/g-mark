@@ -37,6 +37,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train frozen Q6 agent-motion notability classifier.")
     parser.add_argument("--v2vgot-root", default="/workspace/repos/V2V-GoT")
     parser.add_argument("--split", default="train", choices=("train", "val"))
+    parser.add_argument(
+        "--file-name",
+        default="v2v4real_3d_grounding_qa_dataset_v2vgot.json",
+        help=(
+            "QA JSON filename under the split co_llm directory, or an absolute "
+            "path to an isolated QA JSON."
+        ),
+    )
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-report", default="")
     parser.add_argument("--limit", type=int, default=0)
@@ -132,9 +140,9 @@ FEATURE_NAMES = [
 ]
 
 
-def _build_rows(v2vgot_root: str, split: str, limit: int) -> list[Q6Row]:
+def _build_rows(v2vgot_root: str, split: str, file_name: str, limit: int) -> list[Q6Row]:
     adapter = V2VGoTQABenchmarkAdapter(v2vgot_root)
-    samples = adapter.load_samples(split_name=split)
+    samples = adapter.load_samples(split_name=split, file_name=file_name)
     rows: list[Q6Row] = []
     for sample in samples:
         if int(sample.qa_type_id or -1) != 16:
@@ -429,7 +437,7 @@ def _metrics(x: np.ndarray, y: np.ndarray, w: np.ndarray, threshold: float) -> d
 
 def main() -> None:
     args = build_parser().parse_args()
-    rows = _build_rows(args.v2vgot_root, args.split, args.limit)
+    rows = _build_rows(args.v2vgot_root, args.split, args.file_name, args.limit)
     if not rows:
         raise SystemExit("No Q6 rows found.")
     x = np.asarray([r.features for r in rows], dtype=float)

@@ -1,6 +1,6 @@
 import json
 
-from kg_coop_drive.application.local_graph_serializer import LocalGraphSerializer
+from kg_coop_drive.application.scene_graph.local_graph_serializer import LocalGraphSerializer
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

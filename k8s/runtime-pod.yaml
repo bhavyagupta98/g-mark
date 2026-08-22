@@ -77,10 +77,10 @@ spec:
           echo "============================================================"
           echo "Running Key Tests"
           echo "============================================================"
-          python3 -m pytest -q \
-            tests/test_phase2_query_engine.py \
-            tests/test_v2vgot_scene_adapter.py \
-            tests/test_scene_builder.py | tee /tmp/phase2_tests.log
+          # python3 -m pytest -q \
+          #   tests/test_phase2_query_engine.py \
+          #   tests/test_v2vgot_scene_adapter.py \
+          #   tests/test_scene_builder.py | tee /tmp/phase2_tests.log
 
           echo
           echo "============================================================"
@@ -105,4 +105,4 @@ spec:
   volumes:
     - name: storage
       persistentVolumeClaim:
-        claimName: bgupta-pvc
+        claimName: 

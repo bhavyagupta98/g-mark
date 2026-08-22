@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import request
 
-from kg_coop_drive.application.planning_awareness import (
+from kg_coop_drive.application.qa.planning_awareness import (
     PlanningAwarenessBatchLLMClient,
     PlanningAwarenessLLMRankItem,
     PlanningAwarenessLLMRankedItem,
 )
-from kg_coop_drive.application.v2vgotqa_router import (
+from kg_coop_drive.application.qa.v2vgotqa_router import (
     NotableObjectLLMRankItem,
     NotableObjectLLMRankedItem,
     NotableObjectsBatchLLMClient,

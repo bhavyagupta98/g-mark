@@ -1,0 +1,207 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gmark-ablation-report-v2
+  namespace: seelab
+  labels:
+    app: gmark-ablation-report-v2
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: gmark-ablation-report-v2
+    spec:
+      restartPolicy: Never
+      tolerations:
+        - key: nautilus.io/reservation
+          operator: Exists
+          effect: NoSchedule
+        - key: nautilus.io/issue
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: runner
+          image: quay.io/jupyter/scipy-notebook:latest
+          imagePullPolicy: IfNotPresent
+          terminationMessagePolicy: FallbackToLogsOnError
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              trap 'status=$?; echo "[ERROR] Job failed with exit code ${status}; sleeping for debug"; sleep 600; exit ${status}' ERR
+
+              export DEBIAN_FRONTEND=noninteractive
+              export WORKSPACE=/workspace
+              export REPOS_DIR="${WORKSPACE}/repos"
+              export KG_REPO_DIR="${REPOS_DIR}/kg_coop_drive"
+              export V2VGOT_ROOT="${V2VGOT_ROOT:-${REPOS_DIR}/V2V-GoT}"
+              export PYTHONPATH="${KG_REPO_DIR}/src:${KG_REPO_DIR}:${PYTHONPATH:-}"
+              export ABLATION_RUN_NAME="${ABLATION_RUN_NAME:-gmark_ablation_job_$(date -u +%Y%m%d_%H%M%S)}"
+              export ABLATION_MODES="${ABLATION_MODES:-full no_provenance no_candidate_retention no_uncertainty_conflict ego_only_graph flat_non_graph_readout}"
+              export RUN_VALIDATION_ONLY="${RUN_VALIDATION_ONLY:-1}"
+              export RUN_TRAINED_VALIDATION="${RUN_TRAINED_VALIDATION:-0}"
+              export WORKERS="${WORKERS:-32}"
+              export PROGRESS_EVERY="${PROGRESS_EVERY:-250}"
+
+              mkdir -p "${WORKSPACE}/gmark_ablation_job_logs"
+              exec > >(tee -a "${WORKSPACE}/gmark_ablation_job_logs/${ABLATION_RUN_NAME}.log") 2>&1
+              echo "[INFO] Persistent bootstrap/job log: ${WORKSPACE}/gmark_ablation_job_logs/${ABLATION_RUN_NAME}.log"
+
+              echo "[INFO] Python version: $(python3 --version)"
+              missing_packages="$(python3 -c 'import importlib.util; specs={"yaml":"pyyaml","numpy":"numpy","sklearn":"scikit-learn"}; print(" ".join(pip for mod, pip in specs.items() if importlib.util.find_spec(mod) is None))')"
+              if [ -n "${missing_packages}" ]; then
+                echo "MISSING_PACKAGES=${missing_packages}"
+                echo "[FAIL] Missing Python packages are required before running this job."
+                echo "[FAIL] This pod cannot rely on pip because cluster DNS may block package downloads."
+                echo "[FAIL] Use an image with these packages preinstalled, or install them into the mounted environment first."
+                exit 1
+              else
+                echo "MISSING_PACKAGES="
+              fi
+              echo "[PASS] Python package check: yaml, numpy, sklearn"
+
+              check_path() {
+                local label="$1"
+                local path="$2"
+                if [ -e "${path}" ]; then
+                  echo "[PASS] ${label}: ${path}"
+                else
+                  echo "[FAIL] ${label}: ${path}"
+                  exit 1
+                fi
+              }
+
+              check_path "kg_coop_drive repo" "${KG_REPO_DIR}"
+              mkdir -p "${KG_REPO_DIR}/outputs/gmark_ablations/${ABLATION_RUN_NAME}"
+              echo "[INFO] Ablation output dir: ${KG_REPO_DIR}/outputs/gmark_ablations/${ABLATION_RUN_NAME}"
+
+              check_path "V2V-GoT repo" "${V2VGOT_ROOT}"
+              check_path "G-MARK ablation script" "${KG_REPO_DIR}/scripts/e2e/run_gmark_ablation_report.py"
+              grep -q "write_val_filtered_train_json" "${KG_REPO_DIR}/scripts/e2e/run_gmark_ablation_report.py" || {
+                echo "[FAIL] Ablation script does not include train-minus-val filtering support."
+                exit 1
+              }
+              grep -q "def _retains_candidates" "${KG_REPO_DIR}/src/kg_coop_drive/application/qa/v2vgotqa_evaluator.py" || {
+                echo "[FAIL] Evaluator does not include construction-level ablation support."
+                exit 1
+              }
+              check_path "Val QA dataset" "${V2VGOT_ROOT}/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json"
+              check_path "Val processed root" "${V2VGOT_ROOT}/DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy"
+              if [ "${RUN_TRAINED_VALIDATION}" = "1" ]; then
+                check_path "Train QA dataset" "${V2VGOT_ROOT}/DMSTrack/V2V4Real/official_models/train_no_fusion_keep_all/npy/co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json"
+                check_path "Train processed root" "${V2VGOT_ROOT}/DMSTrack/V2V4Real/official_models/train_no_fusion_keep_all/npy"
+              fi
+
+              python3 - <<'PY'
+              import json
+              import os
+              from pathlib import Path
+
+              root = Path(os.environ["V2VGOT_ROOT"])
+              val_root = root / "DMSTrack/V2V4Real/official_models/no_fusion_keep_all/npy"
+              train_root = root / "DMSTrack/V2V4Real/official_models/train_no_fusion_keep_all/npy"
+              val_json = val_root / "co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json"
+              train_json = train_root / "co_llm/v2v4real_3d_grounding_qa_dataset_v2vgot.json"
+
+              if train_root.exists() and val_root.resolve() == train_root.resolve():
+                  raise SystemExit(f"[FAIL] Train/val processed roots resolve to the same path: {train_root}")
+
+              def record_key(record):
+                  conversations = record.get("conversations", [])
+                  question = ""
+                  if isinstance(conversations, list) and conversations:
+                      first = conversations[0]
+                      if isinstance(first, dict):
+                          question = str(first.get("value", ""))
+                  return (
+                      str(record.get("scenario_index", "")),
+                      str(record.get("global_timestamp_index", record.get("local_timestamp_index", ""))),
+                      str(record.get("qa_type_id", "")),
+                      question,
+                  )
+
+              with val_json.open("r", encoding="utf-8") as handle:
+                  val_records = json.load(handle)
+              print(f"[INFO] Val QA records: {len(val_records)}")
+
+              if os.environ.get("RUN_TRAINED_VALIDATION", "1") == "1":
+                  with train_json.open("r", encoding="utf-8") as handle:
+                      train_records = json.load(handle)
+                  overlap = {record_key(record) for record in train_records} & {
+                      record_key(record) for record in val_records
+                  }
+                  print(f"[INFO] Train QA records: {len(train_records)}")
+                  print(f"[INFO] Train/val QA key overlap: {len(overlap)}")
+                  if overlap:
+                      sample = sorted(overlap)[:3]
+                      print(f"[WARN] Train/val QA records overlap; examples={sample}")
+                      print("[WARN] run_gmark_ablation_report.py will write an isolated train-minus-val-overlap QA JSON before trained ablations.")
+
+              print("[PASS] Train/val split preflight")
+              PY
+
+              cd "${KG_REPO_DIR}"
+
+              command=(
+                python3 scripts/e2e/run_gmark_ablation_report.py
+                --run-name "${ABLATION_RUN_NAME}"
+                --v2vgot-root "${V2VGOT_ROOT}"
+                --workers "${WORKERS}"
+                --progress-every "${PROGRESS_EVERY}"
+              )
+
+              for mode in ${ABLATION_MODES}; do
+                command+=(--mode "${mode}")
+              done
+
+              if [ "${RUN_VALIDATION_ONLY}" != "1" ]; then
+                command+=(--skip-validation-only)
+              fi
+              if [ "${RUN_TRAINED_VALIDATION}" != "1" ]; then
+                command+=(--skip-trained-validation)
+              fi
+
+              echo
+              echo "============================================================"
+              echo "Running G-MARK Ablation Report"
+              echo "============================================================"
+              printf ' %q' "${command[@]}"
+              echo
+              "${command[@]}"
+
+              echo
+              echo "============================================================"
+              echo "Ablation Job Complete"
+              echo "============================================================"
+              echo "[INFO] Summary:"
+              echo "[INFO]   ${KG_REPO_DIR}/outputs/gmark_ablations/${ABLATION_RUN_NAME}/ablation_summary.md"
+              echo "[INFO]   ${KG_REPO_DIR}/outputs/gmark_ablations/${ABLATION_RUN_NAME}/ablation_summary.json"
+          env:
+            - name: RUN_VALIDATION_ONLY
+              value: "1"
+            - name: RUN_TRAINED_VALIDATION
+              # Train+validation ablations are intentionally parked for now.
+              # The component-ablation job runs validation-only by default.
+              value: "0"
+            - name: WORKERS
+              value: "32"
+            - name: PROGRESS_EVERY
+              value: "250"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: storage
+              mountPath: /workspace
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: 

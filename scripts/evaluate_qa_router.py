@@ -15,13 +15,18 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator
-from kg_coop_drive.application.planning_awareness import (
+from kg_coop_drive.application.qa.v2vgotqa_evaluator import (
+    GraphAblationMode,
+    TemporalExecutionMode,
+    V2VGoTQAPhase5AEvaluator,
+)
+from kg_coop_drive.application.qa.latency_profiling import SampleLatencyRecord, EvaluationLatencyCollector
+from kg_coop_drive.application.qa.planning_awareness import (
     PlanningAwarenessRanker,
     PlanningAwarenessSelectionPolicy,
     build_planning_awareness_orchestrator,
 )
-from kg_coop_drive.application.v2vgotqa_router import (
+from kg_coop_drive.application.qa.v2vgotqa_router import (
     AgentMotionPredictionHandler,
     ControlSettingsHandler,
     FutureTrajectoryHandler,
@@ -33,7 +38,7 @@ from kg_coop_drive.application.v2vgotqa_router import (
     PlanningAwarenessHandler,
     V2VGoTQARouter,
 )
-from kg_coop_drive.application.future_trajectory_planner import (
+from kg_coop_drive.application.planning.future_trajectory_planner import (
     ControlConditionedFutureTrajectoryPlanner,
 )
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType
@@ -64,6 +69,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split", default="val", choices=("val", "train"))
     parser.add_argument("--limit", type=int, default=25, help="Maximum samples to evaluate. Use 0 for the full split.")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
+    parser.add_argument(
+        "--temporal-execution-mode",
+        default=TemporalExecutionMode.SERIAL.value,
+        choices=tuple(item.value for item in TemporalExecutionMode),
+        help="Temporal execution mode. Default keeps existing serial behavior.",
+    )
+    parser.add_argument(
+        "--graph-ablation-mode",
+        default=GraphAblationMode.FULL.value,
+        choices=tuple(item.value for item in GraphAblationMode),
+        help="Optional G-MARK graph ablation. Defaults to full graph behavior.",
+    )
     parser.add_argument(
         "--task-type",
         action="append",
@@ -190,6 +207,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--llm-timeout-seconds", type=float, default=float(os.environ.get("KG_LOCAL_LLM_TIMEOUT_SECONDS", "180")))
     parser.add_argument("--llm-max-tokens", type=int, default=int(os.environ.get("KG_LOCAL_LLM_MAX_TOKENS", "192")))
     parser.add_argument("--output-jsonl", default="")
+    parser.add_argument(
+        "--latency-jsonl",
+        default="",
+        help="Optional per-sample latency breakdown output path.",
+    )
     parser.add_argument("--progress-every", type=int, default=0)
     parser.add_argument("--workers", type=int, default=1)
     return parser
@@ -369,16 +391,34 @@ def chunk_samples(samples: tuple[object, ...], workers: int) -> list[tuple[objec
     ]
 
 
-def evaluate_chunk_worker(payload: tuple[int, tuple[object, ...], str, str, dict[str, Any], int]):
-    chunk_index, samples, repository_root, baseline_mode, router_config, progress_every = payload
+def evaluate_chunk_worker(payload: tuple[int, tuple[object, ...], str, str, str, str, dict[str, Any], int, bool]):
+    (
+        chunk_index,
+        samples,
+        repository_root,
+        baseline_mode,
+        graph_ablation_mode,
+        temporal_execution_mode,
+        router_config,
+        progress_every,
+        profile_latency,
+    ) = payload
     router = build_router(router_config, llm_client=None)
-    evaluator = V2VGoTQAPhase5AEvaluator(repository_root, router=router)
+    latency_collector = EvaluationLatencyCollector() if profile_latency else None
+    evaluator = V2VGoTQAPhase5AEvaluator(
+        repository_root,
+        router=router,
+        graph_ablation=graph_ablation_mode,
+        temporal_execution_mode=temporal_execution_mode,
+        latency_collector=latency_collector,
+    )
     predictions = evaluator.evaluate_samples(
         samples,
         baseline_mode=baseline_mode,
         progress_every=progress_every,
     )
-    return chunk_index, predictions
+    latency_records = latency_collector.records() if latency_collector is not None else tuple()
+    return chunk_index, predictions, latency_records
 
 
 def evaluate_samples_parallel(
@@ -386,19 +426,31 @@ def evaluate_samples_parallel(
     repository_root: Path,
     samples: tuple[object, ...],
     baseline_mode: str,
+    graph_ablation_mode: str,
+    temporal_execution_mode: str,
     router_config: dict[str, Any],
     workers: int,
     progress_every: int,
+    profile_latency: bool = False,
 ):
     chunks = chunk_samples(samples, workers)
     if len(chunks) == 1:
         router = build_router(router_config)
-        evaluator = V2VGoTQAPhase5AEvaluator(str(repository_root), router=router)
-        return evaluator.evaluate_samples(
+        latency_collector = EvaluationLatencyCollector() if profile_latency else None
+        evaluator = V2VGoTQAPhase5AEvaluator(
+            str(repository_root),
+            router=router,
+            graph_ablation=graph_ablation_mode,
+            temporal_execution_mode=temporal_execution_mode,
+            latency_collector=latency_collector,
+        )
+        predictions = evaluator.evaluate_samples(
             samples,
             baseline_mode=baseline_mode,
             progress_every=progress_every,
         )
+        latency_records = latency_collector.records() if latency_collector is not None else tuple()
+        return predictions, latency_records
 
     results = []
     with ProcessPoolExecutor(max_workers=len(chunks)) as executor:
@@ -410,16 +462,19 @@ def evaluate_samples_parallel(
                     chunk,
                     str(repository_root),
                     baseline_mode,
+                    graph_ablation_mode,
+                    temporal_execution_mode,
                     router_config,
                     progress_every,
+                    profile_latency,
                 ),
             )
             for index, chunk in enumerate(chunks)
         ]
         completed_predictions = 0
         for future in as_completed(futures):
-            chunk_index, chunk_predictions = future.result()
-            results.append((chunk_index, chunk_predictions))
+            chunk_index, chunk_predictions, chunk_latency_records = future.result()
+            results.append((chunk_index, chunk_predictions, chunk_latency_records))
             completed_predictions += len(chunk_predictions)
             print(
                 f"parallel_progress: {completed_predictions}/{len(samples)} "
@@ -427,11 +482,36 @@ def evaluate_samples_parallel(
                 flush=True,
             )
 
-    return tuple(
+    predictions = tuple(
         prediction
-        for _, chunk_predictions in sorted(results, key=lambda item: item[0])
+        for _, chunk_predictions, _ in sorted(results, key=lambda item: item[0])
         for prediction in chunk_predictions
     )
+    latency_records = tuple(
+        record
+        for _, _, chunk_latency_records in sorted(results, key=lambda item: item[0])
+        for record in chunk_latency_records
+    )
+    return predictions, latency_records
+
+
+def write_latency_jsonl(path: Path, records: tuple[SampleLatencyRecord, ...]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(
+                json.dumps(
+                    {
+                        "sample_id": record.sample_id,
+                        "split_name": record.split_name,
+                        "task_type": record.task_type,
+                        "qa_type_id": record.qa_type_id,
+                        "baseline_mode": record.baseline_mode,
+                        "timings_ms": record.timings_ms,
+                    }
+                )
+                + "\n"
+            )
 
 
 def main() -> None:
@@ -451,13 +531,16 @@ def main() -> None:
         selected_qa_type_ids = set(int(value) for value in args.qa_type_ids)
         samples = tuple(sample for sample in samples if sample.qa_type_id in selected_qa_type_ids)
     samples = apply_sample_limit(samples, args.limit)
-    predictions = evaluate_samples_parallel(
+    predictions, latency_records = evaluate_samples_parallel(
         repository_root=repository_root,
         samples=samples,
         baseline_mode=args.baseline_mode,
+        graph_ablation_mode=args.graph_ablation_mode,
+        temporal_execution_mode=args.temporal_execution_mode,
         router_config=router_config,
         workers=args.workers,
         progress_every=args.progress_every,
+        profile_latency=bool(args.latency_jsonl),
     )
     summary = V2VGoTQAPhase5AEvaluator.summarize(predictions)
 
@@ -467,6 +550,8 @@ def main() -> None:
     print(f"repository_root: {repository_root}")
     print(f"split: {args.split}")
     print(f"baseline_mode: {args.baseline_mode}")
+    print(f"graph_ablation_mode: {args.graph_ablation_mode}")
+    print(f"temporal_execution_mode: {args.temporal_execution_mode}")
     print(f"planning_ranker: {args.planning_ranker}")
     print(f"planning_selection_policy: {args.planning_selection_policy}")
     print(f"planning_selection_source: {args.planning_selection_source}")
@@ -532,6 +617,7 @@ def main() -> None:
                             "answer_text": prediction.answer_text,
                             "object_ids": list(prediction.object_ids),
                             "baseline_mode": prediction.baseline_mode,
+                            "graph_ablation_mode": args.graph_ablation_mode,
                             "planning_ranker": args.planning_ranker,
                             "planning_selection_policy": args.planning_selection_policy,
                             "planning_selection_source": args.planning_selection_source,
@@ -558,6 +644,10 @@ def main() -> None:
                     + "\n"
                 )
         print(f"saved_predictions: {output_path}")
+    if args.latency_jsonl:
+        latency_path = Path(args.latency_jsonl).expanduser().resolve()
+        write_latency_jsonl(latency_path, latency_records)
+        print(f"saved_latency: {latency_path}")
 
 
 if __name__ == "__main__":

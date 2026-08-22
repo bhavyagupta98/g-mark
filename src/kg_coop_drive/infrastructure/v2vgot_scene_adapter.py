@@ -100,6 +100,9 @@ class V2VGoTSceneAdapter:
             return json.load(handle)
 
     def _resolve_file_path(self, split_name: str, file_name: str) -> Path:
+        file_path = Path(file_name).expanduser()
+        if file_path.is_absolute():
+            return file_path
         split_dir = (
             "no_fusion_keep_all"
             if split_name == "val"

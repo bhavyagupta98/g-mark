@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import logging
 from math import atan2, dist, tanh
 from typing import Protocol
 
-from kg_coop_drive.application.planning_awareness import (
+from kg_coop_drive.application.qa.planning_awareness import (
     PlanningAwarenessOrchestrator,
     build_planning_awareness_orchestrator,
 )
-from kg_coop_drive.application.future_trajectory_planner import (
+from kg_coop_drive.application.planning.future_trajectory_planner import (
     ControlConditionedFutureTrajectoryPlanner,
 )
 from kg_coop_drive.application.planning.object_motion_predictor import (
@@ -17,15 +18,15 @@ from kg_coop_drive.application.planning.object_motion_predictor import (
 from kg_coop_drive.application.planning.agent_motion_notability_predictor import (
     LearnedAgentMotionNotabilityPredictor,
 )
-from kg_coop_drive.application.control_settings_policy import (
+from kg_coop_drive.application.planning.control_settings_policy import (
     ControlSettingsDecision,
     decide_control_settings,
 )
-from kg_coop_drive.application.qa_selection_policies import (
+from kg_coop_drive.application.qa.qa_selection_policies import (
     InvisibleSelectionPolicy,
     OccludingSelectionPolicy,
 )
-from kg_coop_drive.application.query_engine import SceneQueryEngine
+from kg_coop_drive.application.scene_graph.query_engine import SceneQueryEngine
 from kg_coop_drive.domain.benchmark import BenchmarkSample, BenchmarkTaskType
 from kg_coop_drive.domain.scene import (
     ObjectTrack,
@@ -34,6 +35,8 @@ from kg_coop_drive.domain.scene import (
     TrackStatus,
     VisibilityState,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1741,15 +1744,8 @@ class InvisibleObjectsHandler(_BaseQueryHandler):
     """Handles qa_type_id 13 invisible-object questions."""
 
     task_type = BenchmarkTaskType.INVISIBLE_OBJECTS
-
-    def __init__(
-        self,
-        ranker: str = "legacy",
-        selection_policy: InvisibleSelectionPolicy | None = None,
-        acceptor_model: dict[str, object] | None = None,
-    ) -> None:
-        super().__init__()
-        if ranker not in {
+    _SUPPORTED_RANKERS = frozenset(
+        {
             "legacy",
             "risk_adaptive",
             "road_region",
@@ -1760,8 +1756,26 @@ class InvisibleObjectsHandler(_BaseQueryHandler):
             "mlp_acceptor",
             "logreg_legacy_fallback",
             "logreg_lateral_rescue",
-        }:
+        }
+    )
+    _LEGACY_RANKERS = frozenset({"legacy", "logreg_legacy_fallback"})
+    _WARNED_LEGACY_RANKERS: set[str] = set()
+
+    def __init__(
+        self,
+        ranker: str = "legacy",
+        selection_policy: InvisibleSelectionPolicy | None = None,
+        acceptor_model: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__()
+        if ranker not in self._SUPPORTED_RANKERS:
             raise ValueError(f"Unsupported invisible-object ranker: {ranker}")
+        if ranker in self._LEGACY_RANKERS and ranker not in self._WARNED_LEGACY_RANKERS:
+            LOGGER.warning(
+                "InvisibleObjectsHandler ranker '%s' is legacy. Prefer 'logreg_acceptor' for promoted runs.",
+                ranker,
+            )
+            self._WARNED_LEGACY_RANKERS.add(ranker)
         self._ranker = ranker
         self._selection_policy = selection_policy or InvisibleSelectionPolicy()
         self._acceptor_model = acceptor_model or {}

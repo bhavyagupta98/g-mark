@@ -1,4 +1,4 @@
-from kg_coop_drive.application.track_quality_assessor import TrackQualityAssessor
+from kg_coop_drive.application.tracking.track_quality_assessor import TrackQualityAssessor
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,

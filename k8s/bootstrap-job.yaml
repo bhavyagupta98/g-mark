@@ -106,8 +106,8 @@ spec:
   volumes:
     - name: storage
       persistentVolumeClaim:
-        claimName: bgupta-pvc
+        claimName: 
     - name: ssh-secret
       secret:
-        secretName: bhgupta-github-ssh
-        defaultMode: 0400
+        secretName: 
+        defaultMode: 

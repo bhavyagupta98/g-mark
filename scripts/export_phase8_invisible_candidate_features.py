@@ -17,8 +17,9 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from kg_coop_drive.application.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
-from kg_coop_drive.application.v2vgotqa_router import InvisibleObjectsHandler, InvisibleSelectionPolicy  # noqa: E402
+from kg_coop_drive.application.qa.v2vgotqa_evaluator import V2VGoTQAPhase5AEvaluator  # noqa: E402
+from kg_coop_drive.application.qa.v2vgotqa_evaluator import GraphAblationMode  # noqa: E402
+from kg_coop_drive.application.qa.v2vgotqa_router import InvisibleObjectsHandler, InvisibleSelectionPolicy  # noqa: E402
 from kg_coop_drive.domain.benchmark import BenchmarkTaskType  # noqa: E402
 from kg_coop_drive.domain.scene import ObjectTrack  # noqa: E402
 from kg_coop_drive.infrastructure.v2vgot_benchmark_adapter import V2VGoTQABenchmarkAdapter  # noqa: E402
@@ -41,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split", default="train", choices=("train", "val"))
     parser.add_argument("--file-name", default="v2v4real_3d_grounding_qa_dataset_v2vgot.json")
     parser.add_argument("--baseline-mode", default="cooperative", choices=("cooperative", "ego_only"))
+    parser.add_argument(
+        "--graph-ablation-mode",
+        default=GraphAblationMode.FULL.value,
+        choices=tuple(item.value for item in GraphAblationMode),
+    )
     parser.add_argument(
         "--invisible-ranker",
         default="legacy",
@@ -66,13 +72,14 @@ class _WorkerState:
         self.policy = policy
 
 
-_WORKER_STATE: dict[tuple[str, str, str, int, float, float], _WorkerState] = {}
+_WORKER_STATE: dict[tuple[str, str, str, str, int, float, float], _WorkerState] = {}
 
 
 def _worker_state(config: dict[str, object]) -> _WorkerState:
     key = (
         str(config["v2vgot_root"]),
         str(config["baseline_mode"]),
+        str(config["graph_ablation_mode"]),
         str(config["invisible_ranker"]),
         int(config["shortlist_size"]),
         float(config["min_risk"]),
@@ -89,7 +96,10 @@ def _worker_state(config: dict[str, object]) -> _WorkerState:
         min_relative_to_best=float(config["min_relative_to_best"]),
     )
     handler = InvisibleObjectsHandler(ranker=str(config["invisible_ranker"]), selection_policy=policy)
-    evaluator = V2VGoTQAPhase5AEvaluator(str(config["v2vgot_root"]))
+    evaluator = V2VGoTQAPhase5AEvaluator(
+        str(config["v2vgot_root"]),
+        graph_ablation=str(config["graph_ablation_mode"]),
+    )
     state = _WorkerState(evaluator=evaluator, handler=handler, policy=policy)
     _WORKER_STATE[key] = state
     return state
@@ -288,6 +298,7 @@ def main() -> None:
         "v2vgot_root": str(v2vgot_root),
         "split": args.split,
         "baseline_mode": args.baseline_mode,
+        "graph_ablation_mode": args.graph_ablation_mode,
         "invisible_ranker": args.invisible_ranker,
         "max_results": args.invisible_max_results,
         "shortlist_size": args.shortlist_size,

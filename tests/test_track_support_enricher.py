@@ -1,5 +1,5 @@
-from kg_coop_drive.application.observation_associator import ObservationAssociator
-from kg_coop_drive.application.track_support_enricher import TrackSupportEnricher
+from kg_coop_drive.application.tracking.observation_associator import ObservationAssociator
+from kg_coop_drive.application.tracking.track_support_enricher import TrackSupportEnricher
 from kg_coop_drive.domain.scene import (
     AgentContext,
     CooperativeScene,
