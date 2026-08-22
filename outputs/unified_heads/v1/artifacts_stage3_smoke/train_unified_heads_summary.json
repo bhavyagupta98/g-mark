@@ -1,0 +1,26 @@
+{
+  "run_name": "unified_heads_v1",
+  "labeled_dir": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/unified_heads/v1/labeled/train",
+  "output_dir": "/Users/bhavya/Desktop/ms_projects/kg_coop_drive/outputs/unified_heads/v1/artifacts_stage3_smoke",
+  "families": [
+    "object_retrieval"
+  ],
+  "num_workers": 1,
+  "execution_mode": "sequential",
+  "max_rows": 1000,
+  "artifacts": [],
+  "metrics": {},
+  "failures": [
+    {
+      "family": "object_retrieval",
+      "error": "No valid object-retrieval labeled rows found"
+    }
+  ],
+  "runtime_sec": 0.007,
+  "per_family_runtime_sec": {},
+  "assumptions": [
+    "Stage-3 trains only from labeled train rows.",
+    "Val split is not used for training/threshold tuning.",
+    "Object retrieval trains one shared model with task one-hot features."
+  ]
+}

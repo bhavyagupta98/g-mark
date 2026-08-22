@@ -1,0 +1,87 @@
+run_name: unified_heads_v1
+
+splits:
+  train: train
+  eval: val
+
+kg:
+  use_existing_scene_builder: true
+  mode: cooperative
+
+runtime:
+  num_workers: 8
+  batch_size: 50000
+  log_every: 100000
+  memory_log_every: 500000
+  progress: true
+
+features:
+  bank_version: unified_v1
+  normalize_numeric: false
+  missing_value_policy: zero_with_indicator
+  exclude_leakage_fields:
+    - dist
+    - angle
+    - suggested_speed_idx
+    - suggested_steering_idx
+    - future_trajectory_str_in_ego
+    - future_trajectory_str_in_self
+
+families:
+  object_retrieval:
+    tasks: [11, 12, 13, 14]
+
+  motion_regression:
+    tasks: [15, 17, 19]
+    q9_clean_only: true
+
+  scene_action:
+    tasks: [16, 18]
+
+models:
+  object_retrieval:
+    model_type: logreg
+    shared_across_tasks: true
+    task_one_hot: true
+    l2: 0.01
+    class_weighting: balanced
+    threshold_search: true
+    threshold_metric: f1
+    max_results_by_task:
+      11: null
+      12: null
+      13: 1
+      14: null
+
+  motion_regression:
+    model_type: elasticnet
+    q5_q7_shared: true
+    q9_separate_clean_head: true
+    alpha: 0.001
+    l1_ratio: 0.1
+    standardize: true
+
+  scene_action:
+    model_type: gbdt_classifier
+    q6_binary: true
+    q8_two_heads: true
+    q8_head_model_type: gbdt
+    n_estimators: 280
+    learning_rate: 0.04
+    max_depth: 2
+    min_samples_leaf: 96
+    subsample: 0.7
+    threshold_search: true
+    q6_default_threshold: 0.38
+    q8_speed_class_weighting: none
+    q8_steering_class_weighting: none
+    q8_logreg_c: 5.0
+    q8_logreg_max_iter: 2000
+
+inference:
+  reuse_feature_rows: true
+  feature_dir: outputs/unified_heads/v1/features/val
+  artifact_dir: outputs/unified_heads/v1/artifacts
+  output_dir: outputs/unified_heads/v1/val_eval
+  skip_official_eval: false
+  skip_export: false
